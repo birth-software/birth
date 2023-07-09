@@ -7,3 +7,4 @@ debug_disk
 bochsout.txt
 *.hdd
 loopback_device
+tools/OVMF.fd

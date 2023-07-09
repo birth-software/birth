@@ -70,7 +70,7 @@ pub const Protocol = struct {
     }
 
     fn cast(comptime ProtocolT: type, ptr: ?*anyopaque) *ProtocolT {
-        return @as(*ProtocolT, @ptrCast(@alignCast(@alignOf(ProtocolT), ptr)));
+        return @as(*ProtocolT, @ptrCast(@alignCast(ptr)));
     }
 };
 

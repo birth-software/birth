@@ -85,8 +85,8 @@ pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) nor
     }
     assert(scheduler.common.generic.disabled);
     scheduler.initDisabled();
-    @panic("TWTQWD");
     // command_buffer = Syscall(.cpu, .get_command_buffer).blocking(&command_buffer) catch @panic("Unable to get command buffer");
+    Syscall(.cpu, .shutdown).blocking({}) catch unreachable;
 }
 
 // export fn riseInitializeDisabled(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {

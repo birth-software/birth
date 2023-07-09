@@ -157,7 +157,7 @@ const MemoryMap = extern struct {
 
     pub fn next(memory_map: *MemoryMap) !?bootloader.MemoryMapEntry {
         if (memory_map.offset < memory_map.size) {
-            const entry = @as(*MemoryDescriptor, @ptrCast(@alignCast(@alignOf(MemoryDescriptor), memory_map.buffer[memory_map.offset..].ptr))).*;
+            const entry = @as(*MemoryDescriptor, @ptrCast(@alignCast(memory_map.buffer[memory_map.offset..].ptr))).*;
             memory_map.offset += memory_map.descriptor_size;
             const result = bootloader.MemoryMapEntry{
                 .region = PhysicalMemoryRegion.new(.{
@@ -295,7 +295,7 @@ const Initialization = struct {
                 .x86_64 => .{
                     .rsdp = for (system_table.configuration_table[0..system_table.number_of_table_entries]) |configuration_table| {
                         if (configuration_table.vendor_guid.eql(ConfigurationTable.acpi_20_table_guid)) {
-                            break @as(*ACPI.RSDP.Descriptor1, @ptrCast(@alignCast(@alignOf(ACPI.RSDP.Descriptor1), configuration_table.vendor_table)));
+                            break @as(*ACPI.RSDP.Descriptor1, @ptrCast(@alignCast(configuration_table.vendor_table)));
                         }
                     } else return Error.rsdp_not_found,
                 },

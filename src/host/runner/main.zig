@@ -130,7 +130,40 @@ pub fn main() anyerror!void {
             }
 
             switch (arguments_result.configuration.boot_protocol) {
-                .uefi => try argument_list.appendSlice(&.{ "-bios", "tools/OVMF_CODE-pure-efi.fd" }),
+                .uefi => {
+                    const ovmf_path = "tools/OVMF.fd";
+                    if (host.cwd().openFile(ovmf_path, .{})) |file_descriptor| {
+                        file_descriptor.close();
+                    } else |_| {
+                        const url = "https://retrage.github.io/edk2-nightly/bin/RELEASEX64_OVMF.fd";
+                        const uri = try host.Uri.parse(url);
+
+                        var http_client = host.http.Client{ .allocator = wrapped_allocator.zigUnwrap() };
+                        defer http_client.deinit();
+
+                        var request_headers = host.http.Headers{ .allocator = wrapped_allocator.zigUnwrap() };
+                        defer request_headers.deinit();
+
+                        var request = try http_client.request(.GET, uri, request_headers, .{});
+                        defer request.deinit();
+
+                        try request.start();
+                        try request.wait();
+
+                        if (request.response.status != .ok) return error.ResponseNotOk;
+                        const content_length = request.response.content_length orelse return error.OutOfMemory;
+
+                        const buffer = try wrapped_allocator.zigUnwrap().alloc(u8, content_length);
+                        const read_byte_count = try request.readAll(buffer);
+                        if (read_byte_count != buffer.len) {
+                            return error.OutOfMemory;
+                        }
+
+                        try host.cwd().writeFile(ovmf_path, buffer);
+                    }
+
+                    try argument_list.appendSlice(&.{ "-bios", ovmf_path });
+                },
                 else => {},
             }
 

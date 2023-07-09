@@ -512,19 +512,6 @@ pub fn build(b_arg: *Build) !void {
             }
         }
     }
-
-    if (os == .linux) {
-        const generate_command = b.addSystemCommand(&.{ "dot", "-Tpng" });
-        generate_command.addFileSourceArg(FileSource.relative("capabilities.dot"));
-        generate_command.addArg("-o");
-        const png = generate_command.addOutputFileArg("capabilities.png");
-
-        const visualize_command = b.addSystemCommand(&.{"xdg-open"});
-        visualize_command.addFileSourceArg(png);
-
-        const dot_command = b.step("dot", "TEMPORARY: (developers only) Generate a graph and visualize it");
-        dot_command.dependOn(&visualize_command.step);
-    }
 }
 
 const Options = struct {

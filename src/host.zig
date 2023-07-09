@@ -28,6 +28,9 @@ pub const ArrayListAligned = std.ArrayListAligned;
 
 pub const time = std.time;
 
+pub const http = std.http;
+pub const Uri = std.Uri;
+
 // Build imports
 pub const build = std.build;
 
