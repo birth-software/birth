@@ -28,7 +28,7 @@ jobs:
           ubuntu-latest,
           macos-latest,
           windows-latest,
-          archlinux-latest-64-minimal
+          self-hosted,
     ]
     steps:
       - uses: actions/checkout@v3
