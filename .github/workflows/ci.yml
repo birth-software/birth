@@ -23,18 +23,18 @@ jobs:
     strategy:
       matrix:
         os: [
-        ]
-    runs-on: [
           ubuntu-latest,
           macos-latest,
           windows-latest,
-          self-hosted,
-    ]
+        ]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: master
 
+      - name: Zig environment variables
+        run: zig env
       - name: Build test executables
         run: zig build all_tests -Dci --verbose
