@@ -1,0 +1,31 @@
+{
+    "memory": {
+        "amount": "2048",
+        "unit": "megabyte"
+    },
+    "virtualize": false,
+    "vga": "std",
+    "smp": 2,
+    "debugcon": "stdio",
+    "log": {
+        "file": null,
+        "guest_errors": true,
+        "assembly": false,
+        "interrupts": true
+    },
+    "trace": [
+        "nvme",
+        "pci",
+        "ide",
+        "ata",
+        "ahci",
+        "sata",
+        "apic_report_irq_delivered",
+        "apic_reset_irq_delivered",
+        "apic_get_irq_delivered",
+        "apic_local_deliver",
+        "apic_deliver_irq",
+        "apic_mem_readl",
+        "apic_mem_writel"
+    ]
+}
