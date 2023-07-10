@@ -21,6 +21,7 @@ const Error = error{
     not_implemented,
     architecture_not_supported,
     execution_environment_not_supported,
+    ovmf_path_not_found,
 };
 
 pub fn main() anyerror!void {
@@ -44,6 +45,7 @@ pub fn main() anyerror!void {
         var argument_debug_loader: ?bool = null;
         var argument_init_path: ?[]const u8 = null;
         var argument_index: usize = 0;
+        var argument_ovmf_path: ?[]const u8 = null;
 
         while (argument_parser.next()) |argument_type| switch (argument_type) {
             .disk_image_path => {
@@ -95,6 +97,10 @@ pub fn main() anyerror!void {
                 argument_init_path = arguments[argument_index];
                 argument_index += 1;
             },
+            .ovmf_path => {
+                argument_ovmf_path = arguments[argument_index];
+                argument_index += 1;
+            },
         };
 
         if (argument_index != arguments.len) return Error.wrong_argument_count;
@@ -110,6 +116,7 @@ pub fn main() anyerror!void {
             .debug_user = argument_debug_user orelse return Error.debug_user_not_found,
             .debug_loader = argument_debug_loader orelse return Error.debug_loader_not_found,
             .init = argument_init_path orelse return Error.init_not_found,
+            .ovmf_path = argument_ovmf_path orelse return Error.ovmf_path_not_found,
         };
     };
 
@@ -130,40 +137,7 @@ pub fn main() anyerror!void {
             }
 
             switch (arguments_result.configuration.boot_protocol) {
-                .uefi => {
-                    const ovmf_path = "tools/OVMF.fd";
-                    if (host.cwd().openFile(ovmf_path, .{})) |file_descriptor| {
-                        file_descriptor.close();
-                    } else |_| {
-                        const url = "https://retrage.github.io/edk2-nightly/bin/RELEASEX64_OVMF.fd";
-                        const uri = try host.Uri.parse(url);
-
-                        var http_client = host.http.Client{ .allocator = wrapped_allocator.zigUnwrap() };
-                        defer http_client.deinit();
-
-                        var request_headers = host.http.Headers{ .allocator = wrapped_allocator.zigUnwrap() };
-                        defer request_headers.deinit();
-
-                        var request = try http_client.request(.GET, uri, request_headers, .{});
-                        defer request.deinit();
-
-                        try request.start();
-                        try request.wait();
-
-                        if (request.response.status != .ok) return error.ResponseNotOk;
-                        const content_length = request.response.content_length orelse return error.OutOfMemory;
-
-                        const buffer = try wrapped_allocator.zigUnwrap().alloc(u8, content_length);
-                        const read_byte_count = try request.readAll(buffer);
-                        if (read_byte_count != buffer.len) {
-                            return error.OutOfMemory;
-                        }
-
-                        try host.cwd().writeFile(ovmf_path, buffer);
-                    }
-
-                    try argument_list.appendSlice(&.{ "-bios", ovmf_path });
-                },
+                .uefi => try argument_list.appendSlice(&.{ "-bios", arguments_result.ovmf_path }),
                 else => {},
             }
 

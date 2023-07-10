@@ -481,6 +481,7 @@ pub const ArgumentParser = struct {
             debug_user,
             debug_loader,
             init,
+            ovmf_path,
         };
 
         pub const Result = struct {
@@ -494,6 +495,7 @@ pub const ArgumentParser = struct {
             debug_user: bool,
             debug_loader: bool,
             init: []const u8,
+            ovmf_path: []const u8,
         };
     };
 };
