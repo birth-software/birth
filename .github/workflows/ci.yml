@@ -28,13 +28,30 @@ jobs:
           windows-latest,
         ]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v3
-      - uses: goto-bus-stop/setup-zig@v2
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: master
-
       - name: Zig environment variables
         run: zig env
       - name: Build test executables
         run: zig build all_tests -Dci --verbose
+  build_and_test:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: master
+      - name: Zig environment variables
+        run: zig env
+      - name: Build test executables
+        run: zig build all_tests -Dci -Dci_native --verbose
+      - name: Test with QEMU
+        run: zig build test_all -Dci -Dci_native --verbose

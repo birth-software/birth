@@ -37,6 +37,7 @@ const source_root_dir = "src";
 const user_program_dir_path = "src/user/programs";
 
 var ci = false;
+var ci_native = false;
 var debug_user = false;
 var debug_loader = false;
 var modules = Modules{};
@@ -49,6 +50,7 @@ var options = Options{};
 pub fn build(b_arg: *Build) !void {
     b = b_arg;
     ci = b.option(bool, "ci", "CI mode") orelse false;
+    ci_native = b.option(bool, "ci_native", "CI mode in self-hosted runner") orelse false;
     debug_user = b.option(bool, "debug_user", "Debug user program") orelse false;
     debug_loader = b.option(bool, "debug_loader", "Debug loader program") orelse false;
     const default_cfg_override = b.option([]const u8, "default", "Default configuration JSON file") orelse "config/default.json";
@@ -157,6 +159,7 @@ pub fn build(b_arg: *Build) !void {
         root_project_path: []const u8,
         modules: []const ModuleID,
         c: ?C = null,
+        run_native: bool = true,
 
         const C = struct {
             include_paths: []const []const u8,
@@ -190,6 +193,7 @@ pub fn build(b_arg: *Build) !void {
                 .link_libc = true,
                 .link_libcpp = false,
             },
+            .run_native = false,
         },
     };
 
@@ -222,11 +226,24 @@ pub fn build(b_arg: *Build) !void {
             }
         }
 
-        const run_test_step = b.addRunArtifact(test_exe);
         //run_test_step.condition = .always;
-        build_steps.test_all.dependOn(&run_test_step.step);
-        build_steps.test_host.dependOn(&run_test_step.step);
+        const should_run = !ci_native or (ci_native and native_test.run_native);
+        if (should_run) {
+            const run_test_step = b.addRunArtifact(test_exe);
+            build_steps.test_all.dependOn(&run_test_step.step);
+            build_steps.test_host.dependOn(&run_test_step.step);
+        }
     }
+
+    const ovmf_downloader = try addCompileStep(.{
+        .name = "ovmf_downloader",
+        .root_project_path = "src/host/ovmf_downloader",
+        .optimize_mode = .Debug,
+        .modules = &.{ .lib, .host },
+        .kind = .exe,
+    });
+    const ovmf_downloader_run_step = b.addRunArtifact(ovmf_downloader);
+    const ovmf_path = ovmf_downloader_run_step.addOutputFileArg("OVMF.fd");
 
     {
         var user_module_list = std.ArrayList(common.Module).init(b.allocator);
@@ -461,6 +478,7 @@ pub fn build(b_arg: *Build) !void {
                                         .is_debug = false,
                                         .is_test = is_test,
                                     },
+                                    .ovmf_path = ovmf_path,
                                 });
                                 const runner_debug = try newRunnerRunArtifact(.{
                                     .configuration = configuration,
@@ -473,6 +491,7 @@ pub fn build(b_arg: *Build) !void {
                                         .is_debug = true,
                                         .is_test = is_test,
                                     },
+                                    .ovmf_path = ovmf_path,
                                 });
 
                                 if (is_test) {
@@ -572,9 +591,12 @@ fn newRunnerRunArtifact(arguments: struct {
     cpu_driver: *CompileStep,
     user_init: *CompileStep,
     qemu_options: QEMUOptions,
+    ovmf_path: FileSource,
 }) !*RunStep {
     const runner = b.addRunArtifact(arguments.runner);
+
     var argument_parser = common.ArgumentParser.Runner{};
+
     while (argument_parser.next()) |argument_type| switch (argument_type) {
         .configuration => inline for (common.fields(Configuration)) |field| runner.addArg(@tagName(@field(arguments.configuration, field.name))),
         .image_configuration_path => runner.addArg(common.ImageConfig.default_path),
@@ -586,6 +608,7 @@ fn newRunnerRunArtifact(arguments: struct {
         .ci => runner.addArg(if (ci) "true" else "false"),
         .debug_user => runner.addArg(if (debug_user) "true" else "false"),
         .debug_loader => runner.addArg(if (debug_loader) "true" else "false"),
+        .ovmf_path => runner.addFileSourceArg(arguments.ovmf_path),
     };
 
     return runner;

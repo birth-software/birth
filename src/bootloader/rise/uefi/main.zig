@@ -97,7 +97,6 @@ const Filesystem = extern struct {
 
     pub fn getFileSize(filesystem: *Filesystem, file_path: []const u8) !u32 {
         const file = try filesystem.openFile(file_path);
-        log.debug("File size", .{});
         var file_info_buffer: [@sizeOf(uefi.FileInfo) + 0x100]u8 align(@alignOf(uefi.FileInfo)) = undefined;
         var file_info_size = file_info_buffer.len;
         try uefi.Try(file.handle.getInfo(&uefi.FileInfo.guid, &file_info_size, &file_info_buffer));
@@ -112,24 +111,19 @@ const Filesystem = extern struct {
             return Error.boot_services_exited;
         }
 
-        log.debug("opening file: {s}", .{file_path});
         var file: *FileProtocol = undefined;
         var path_buffer: [256:0]u16 = undefined;
         const length = try lib.unicode.utf8ToUtf16Le(&path_buffer, file_path);
         path_buffer[length] = 0;
         const path = path_buffer[0..length :0];
         const uefi_path = if (path[0] == '/') path[1..] else path;
-        log.debug("uefi path: {any}", .{uefi_path});
 
         try uefi.Try(filesystem.root.open(&file, uefi_path, FileProtocol.efi_file_mode_read, 0));
-        log.debug("Opened", .{});
 
         const result = FileDescriptor{
             .handle = file,
             .path_size = @as(u32, @intCast(path.len * @sizeOf(u16))),
         };
-
-        log.debug("opened file: {s}", .{file_path});
 
         return result;
     }
@@ -251,9 +245,7 @@ const Initialization = struct {
                 },
             },
             .framebuffer = blk: {
-                log.debug("Locating GOP", .{});
                 const gop = try Protocol.locate(uefi.GraphicsOutputProtocol, boot_services);
-                log.debug("Located GOP", .{});
 
                 const pixel_format_info: struct {
                     red_color_mask: bootloader.Framebuffer.ColorMask,
@@ -303,7 +295,6 @@ const Initialization = struct {
             },
         };
 
-        log.debug("Memory map size: {}", .{init.memory_map.size});
         _ = boot_services.getMemoryMap(&init.memory_map.size, @as([*]MemoryDescriptor, @ptrCast(&init.memory_map.buffer)), &init.memory_map.key, &init.memory_map.descriptor_size, &init.memory_map.descriptor_version);
         init.memory_map.entry_count = @as(u32, @intCast(@divExact(init.memory_map.size, init.memory_map.descriptor_size)));
         assert(init.memory_map.entry_count > 0);
@@ -320,8 +311,6 @@ const Initialization = struct {
             const expected_memory_map_size = init.memory_map.size;
             const expected_memory_map_descriptor_size = init.memory_map.descriptor_size;
             const expected_memory_map_descriptor_version = init.memory_map.descriptor_version;
-
-            log.debug("Getting memory map before exiting boot services...", .{});
 
             blk: while (init.memory_map.size < MemoryMap.buffer_len) : (init.memory_map.size += init.memory_map.descriptor_size) {
                 uefi.Try(init.boot_services.getMemoryMap(&init.memory_map.size, @as([*]MemoryDescriptor, @ptrCast(&init.memory_map.buffer)), &init.memory_map.key, &init.memory_map.descriptor_size, &init.memory_map.descriptor_version)) catch continue;

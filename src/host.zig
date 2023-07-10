@@ -15,6 +15,9 @@ pub const cwd = fs.cwd;
 pub const Dir = fs.Dir;
 pub const basename = fs.path.basename;
 pub const dirname = fs.path.dirname;
+pub const realpathAlloc = fs.realpathAlloc;
+
+pub const os = std.os;
 
 const io = std.io;
 pub const getStdOut = std.io.getStdOut;
