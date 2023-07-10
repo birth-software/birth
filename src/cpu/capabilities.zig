@@ -7,7 +7,7 @@ const log = lib.log.scoped(.capabilities);
 const privileged = @import("privileged");
 const PhysicalAddress = lib.PhysicalAddress;
 const PhysicalMemoryRegion = lib.PhysicalMemoryRegion;
-const rise = @import("rise");
+const birth = @import("birth");
 const cpu = @import("cpu");
 
 pub const RootDescriptor = extern struct {
@@ -149,7 +149,7 @@ pub const Scheduler = extern struct {
 };
 
 comptime {
-    assert(enumCount(Dynamic) + enumCount(Static) == enumCount(rise.capabilities.Type));
+    assert(enumCount(Dynamic) + enumCount(Static) == enumCount(birth.capabilities.Type));
 }
 
 pub const Root = extern struct {
@@ -174,7 +174,7 @@ pub const Root = extern struct {
         other.dynamic = root.dynamic;
     }
 
-    pub inline fn hasPermissions(root: *const Root, comptime capability_type: rise.capabilities.Type, command: rise.capabilities.Command(capability_type)) bool {
+    pub inline fn hasPermissions(root: *const Root, comptime capability_type: birth.capabilities.Type, command: birth.capabilities.Command(capability_type)) bool {
         return switch (capability_type) {
             // static capabilities
             inline .cpu,

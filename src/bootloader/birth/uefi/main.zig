@@ -419,7 +419,7 @@ pub fn main() noreturn {
     initialization.initialize() catch |err| {
         @panic(@errorName(err));
     };
-    bootloader.Information.initialize(&initialization, .rise, .uefi) catch |err| {
+    bootloader.Information.initialize(&initialization, .birth, .uefi) catch |err| {
         @panic(@errorName(err));
     };
 }

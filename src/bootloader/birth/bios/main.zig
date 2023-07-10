@@ -269,7 +269,7 @@ export fn _start() callconv(.C) noreturn {
     bios.A20Enable() catch @panic("A20 is not enabled");
 
     initialization.initialize() catch |err| @panic(@errorName(err));
-    bootloader.Information.initialize(&initialization, .rise, .bios) catch |err| {
+    bootloader.Information.initialize(&initialization, .birth, .bios) catch |err| {
         @panic(@errorName(err));
     };
 }

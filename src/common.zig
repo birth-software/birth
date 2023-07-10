@@ -180,7 +180,7 @@ pub const DiskType = enum(u32) {
 };
 
 pub const FilesystemType = enum(u32) {
-    rise = 0,
+    birth = 0,
     ext2 = 1,
     fat32 = 2,
 
@@ -221,7 +221,7 @@ pub const architecture_bootloader_map = blk: {
 
     array[architectureIndex(.x86_64)] = &.{
         .{
-            .id = .rise,
+            .id = .birth,
             .protocols = &.{ .bios, .uefi },
         },
         .{
@@ -232,7 +232,7 @@ pub const architecture_bootloader_map = blk: {
 
     // array[architectureIndex(.aarch64)] = &.{
     //     .{
-    //         .id = .rise,
+    //         .id = .birth,
     //         .protocols = &.{.uefi},
     //     },
     //     .{
@@ -243,7 +243,7 @@ pub const architecture_bootloader_map = blk: {
 
     // array[architectureIndex(.riscv64)] = &.{
     //     .{
-    //         .id = .rise,
+    //         .id = .birth,
     //         .protocols = &.{.uefi},
     //     },
     // };
@@ -252,7 +252,7 @@ pub const architecture_bootloader_map = blk: {
 };
 
 pub const Bootloader = enum(u32) {
-    rise,
+    birth,
     limine,
 
     pub const Protocol = enum(u32) {
@@ -276,7 +276,6 @@ pub const ExecutionEnvironment = enum {
 };
 
 pub const ImageConfig = struct {
-    image_name: []const u8,
     sector_count: u64,
     sector_size: u16,
     partition_table: PartitionTableType,
@@ -398,7 +397,7 @@ pub const UserProgram = struct {
     };
 };
 
-pub const RiseProgram = enum {
+pub const BirthProgram = enum {
     bootloader,
     cpu,
     user,
