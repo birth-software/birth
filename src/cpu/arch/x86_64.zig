@@ -26,7 +26,7 @@ const init = @import("./x86/64/init.zig");
 pub const syscall = @import("./x86/64/syscall.zig");
 pub const entryPoint = init.entryPoint;
 
-const rise = @import("rise");
+const birth = @import("birth");
 
 var writer_lock: Spinlock = .released;
 

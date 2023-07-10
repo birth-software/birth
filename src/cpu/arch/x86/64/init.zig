@@ -2,7 +2,7 @@ const bootloader = @import("bootloader");
 const cpu = @import("cpu");
 const lib = @import("lib");
 const privileged = @import("privileged");
-const rise = @import("rise");
+const birth = @import("birth");
 
 const Allocator = lib.Allocator;
 const assert = lib.assert;
@@ -415,8 +415,8 @@ export var idt = x86_64.IDT{};
 export var user_stack: u64 = 0;
 
 comptime {
-    assert(rise.arch.user_code_selector == x86_64.user_code_selector);
-    assert(rise.arch.user_data_selector == x86_64.user_data_selector);
+    assert(birth.arch.user_code_selector == x86_64.user_code_selector);
+    assert(birth.arch.user_data_selector == x86_64.user_data_selector);
 }
 
 pub fn InterruptHandler(comptime interrupt_number: u64, comptime has_error_code: bool) fn () callconv(.Naked) noreturn {
@@ -934,7 +934,7 @@ fn spawnInitBSP(init_file: []const u8, cpu_page_tables: paging.CPUPageTables) !n
     scheduler_common_arch.disabled_save_area.registers.rsi = @intFromBool(is_init);
 
     scheduler_common_arch.disabled_save_area.registers.rip = entry_point; // Set entry point
-    scheduler_common_arch.disabled_save_area.registers.rsp = user_scheduler_virtual_address.offset(@offsetOf(rise.UserScheduler, "setup_stack")).value() + scheduler_common_arch.generic.setup_stack.len;
+    scheduler_common_arch.disabled_save_area.registers.rsp = user_scheduler_virtual_address.offset(@offsetOf(birth.UserScheduler, "setup_stack")).value() + scheduler_common_arch.generic.setup_stack.len;
     scheduler_common.setup_stack_lock.value = true;
     scheduler_common_arch.disabled_save_area.registers.rflags = .{ .IF = true }; // Set RFLAGS
 
@@ -1452,7 +1452,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
     });
 
     init_cpu_scheduler.* = cpu.UserScheduler{
-        .common = user_scheduler_virtual_address.access(*rise.UserScheduler),
+        .common = user_scheduler_virtual_address.access(*birth.UserScheduler),
         .capability_root_node = cpu.capabilities.Root{
             .static = .{
                 .cpu = true,
@@ -1478,7 +1478,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         },
     };
 
-    const higher_half_scheduler_common = scheduler_memory_physical_region.address.toHigherHalfVirtualAddress().access(*rise.UserScheduler);
+    const higher_half_scheduler_common = scheduler_memory_physical_region.address.toHigherHalfVirtualAddress().access(*birth.UserScheduler);
     // log.debug("Higher half: 0x{x}", .{@ptrToInt(higher_half_scheduler_common)});
     higher_half_scheduler_common.disabled = true;
     higher_half_scheduler_common.core_id = cpu.core_id;

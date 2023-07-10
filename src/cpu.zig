@@ -16,7 +16,7 @@ const stopCPU = privileged.arch.stopCPU;
 const VirtualAddress = privileged.VirtualAddress;
 const VirtualMemoryRegion = privileged.VirtualMemoryRegion;
 
-const rise = @import("rise");
+const birth = @import("birth");
 
 pub const test_runner = @import("cpu/test_runner.zig");
 pub const arch = @import("cpu/arch.zig");
@@ -67,10 +67,10 @@ pub const Driver = extern struct {
 /// This data structure holds the information needed to run a program in a core (cpu side)
 pub const UserScheduler = extern struct {
     capability_root_node: capabilities.Root,
-    common: *rise.UserScheduler,
+    common: *birth.UserScheduler,
     padding: [padding_byte_count]u8 = .{0} ** padding_byte_count,
 
-    const total_size = @sizeOf(capabilities.Root) + @sizeOf(*rise.UserScheduler);
+    const total_size = @sizeOf(capabilities.Root) + @sizeOf(*birth.UserScheduler);
     const aligned_size = lib.alignForward(usize, total_size, lib.arch.valid_page_sizes[0]);
     const padding_byte_count = aligned_size - total_size;
 

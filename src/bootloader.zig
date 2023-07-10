@@ -283,7 +283,7 @@ pub const Information = extern struct {
         @memset(page_counters, 0);
 
         // Make sure pages are allocated to host the bootloader information and fetch memory entries from firmware (only non-UEFI)
-        if (bootloader_tag != .rise or protocol != .uefi) {
+        if (bootloader_tag != .birth or protocol != .uefi) {
             page_counters[total_allocation.index] = bootloader_information.getAlignedTotalSize() >> lib.arch.page_shifter(lib.arch.valid_page_sizes[0]);
 
             const new_memory_map_entry_count = try bootloader_information.initializeMemoryMap(initialization);
@@ -307,7 +307,7 @@ pub const Information = extern struct {
         const compressed_bundle = try initialization.filesystem.readFile("/bundle", compressed_bundle_buffer);
         assert(compressed_bundle.len > 0);
 
-        if (bootloader_tag == .rise and protocol == .uefi) {
+        if (bootloader_tag == .birth and protocol == .uefi) {
             // Check if the memory map entry count matches here is not useful because probably it's going to be less as exiting boot services seems
             // like making some deallocations
             const new_memory_map_entry_count = @as(u32, @intCast(try bootloader_information.initializeMemoryMap(initialization)));

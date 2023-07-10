@@ -23,7 +23,7 @@ const ExecutionEnvironment = common.ExecutionEnvironment;
 const FilesystemType = common.FilesystemType;
 const OptimizeMode = common.OptimizeMode;
 const QEMUOptions = common.QEMUOptions;
-const RiseProgram = common.RiseProgram;
+const BirthProgram = common.BirthProgram;
 const Suffix = common.Suffix;
 const Target = common.Target;
 
@@ -76,9 +76,9 @@ pub fn build(b_arg: *Build) !void {
         try mods.setDependencies(.uefi, &.{ .lib, .privileged });
         try mods.setDependencies(.limine_installer, &.{ .lib, .privileged });
         try mods.setDependencies(.privileged, &.{ .lib, .bootloader });
-        try mods.setDependencies(.cpu, &.{ .privileged, .lib, .bootloader, .rise });
-        try mods.setDependencies(.rise, &.{.lib});
-        try mods.setDependencies(.user, &.{ .lib, .rise });
+        try mods.setDependencies(.cpu, &.{ .privileged, .lib, .bootloader, .birth });
+        try mods.setDependencies(.birth, &.{.lib});
+        try mods.setDependencies(.user, &.{ .lib, .birth });
 
         break :blk mods;
     };
@@ -283,7 +283,7 @@ pub fn build(b_arg: *Build) !void {
                     .root_project_path = cpu_driver_path,
                     .target = target,
                     .optimize_mode = optimize_mode,
-                    .modules = &.{ .lib, .bootloader, .privileged, .cpu, .rise },
+                    .modules = &.{ .lib, .bootloader, .privileged, .cpu, .birth },
                 });
 
                 cpu_driver.force_pic = true;
@@ -318,7 +318,7 @@ pub fn build(b_arg: *Build) !void {
                         .root_project_path = try std.mem.concat(b.allocator, u8, &.{ user_program_dir_path, "/", module.name }),
                         .target = user_target,
                         .optimize_mode = optimize_mode,
-                        .modules = &.{ .lib, .user, .rise },
+                        .modules = &.{ .lib, .user, .birth },
                     });
                     user_module.strip = false;
 
@@ -331,16 +331,16 @@ pub fn build(b_arg: *Build) !void {
                 for (bootloaders) |bootloader_struct| {
                     const bootloader = bootloader_struct.id;
                     for (bootloader_struct.protocols) |boot_protocol| {
-                        const rise_loader_path = "src/bootloader/rise/";
+                        const birth_loader_path = "src/bootloader/birth/";
                         const limine_loader_path = "src/bootloader/limine/";
                         const bootloader_name = "loader";
                         const bootloader_modules = [_]ModuleID{ .lib, .bootloader, .privileged };
 
                         const bootloader_compile_step = switch (bootloader) {
-                            .rise => switch (boot_protocol) {
+                            .birth => switch (boot_protocol) {
                                 .bios => switch (architecture) {
                                     .x86_64 => blk: {
-                                        const bootloader_path = rise_loader_path ++ "bios";
+                                        const bootloader_path = birth_loader_path ++ "bios";
                                         const executable = try addCompileStep(.{
                                             .kind = executable_kind,
                                             .name = bootloader_name,
@@ -362,7 +362,7 @@ pub fn build(b_arg: *Build) !void {
                                     else => return Error.architecture_not_supported,
                                 },
                                 .uefi => blk: {
-                                    const bootloader_path = rise_loader_path ++ "uefi";
+                                    const bootloader_path = birth_loader_path ++ "uefi";
                                     const executable = try addCompileStep(.{
                                         .kind = executable_kind,
                                         .name = bootloader_name,
@@ -420,7 +420,7 @@ pub fn build(b_arg: *Build) !void {
                         }
 
                         const execution_environments: []const ExecutionEnvironment = switch (bootloader) {
-                            .rise, .limine => switch (boot_protocol) {
+                            .birth, .limine => switch (boot_protocol) {
                                 .bios => switch (architecture) {
                                     .x86_64 => &.{.qemu},
                                     else => return Error.architecture_not_supported,
@@ -534,12 +534,12 @@ pub fn build(b_arg: *Build) !void {
 }
 
 const Options = struct {
-    arr: std.EnumArray(RiseProgram, *OptionsStep) = std.EnumArray(RiseProgram, *OptionsStep).initUndefined(),
+    arr: std.EnumArray(BirthProgram, *OptionsStep) = std.EnumArray(BirthProgram, *OptionsStep).initUndefined(),
 
-    pub fn createOption(options_struct: *Options, rise_program: RiseProgram) void {
+    pub fn createOption(options_struct: *Options, birth_program: BirthProgram) void {
         const new_options = b.addOptions();
-        new_options.addOption(RiseProgram, "program_type", rise_program);
-        options_struct.arr.set(rise_program, new_options);
+        new_options.addOption(BirthProgram, "program_type", birth_program);
+        options_struct.arr.set(birth_program, new_options);
     }
 };
 
@@ -681,14 +681,14 @@ const ModuleID = enum {
     uefi,
     limine,
     limine_installer,
-    /// This module contains code that is used by Rise privileged programs
+    /// This module contains code that is used by birth privileged programs
     privileged,
-    /// This module contains code that is unique to Rise CPU drivers
+    /// This module contains code that is unique to birth CPU drivers
     cpu,
     /// This module contains code that is used by userspace programs
     user,
-    /// This module contains code that is interacting between userspace and cpu in Rise
-    rise,
+    /// This module contains code that is interacting between userspace and cpu in birth
+    birth,
 };
 
 pub const Modules = struct {

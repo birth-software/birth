@@ -1,8 +1,8 @@
 const lib = @import("lib");
 
-pub const arch = @import("rise/arch.zig");
-pub const capabilities = @import("rise/capabilities.zig");
-pub const syscall = @import("rise/syscall.zig");
+pub const arch = @import("birth/arch.zig");
+pub const capabilities = @import("birth/capabilities.zig");
+pub const syscall = @import("birth/syscall.zig");
 
 /// This struct is the shared part that the user and the cpu see
 pub const UserScheduler = extern struct {

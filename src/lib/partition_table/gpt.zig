@@ -402,7 +402,7 @@ const limine_unique_partition_guid = GUID{
 
 const FilesystemCacheTypes = blk: {
     var types: [Filesystem.Type.count]type = undefined;
-    types[@intFromEnum(Filesystem.Type.rise)] = void;
+    types[@intFromEnum(Filesystem.Type.birth)] = void;
     types[@intFromEnum(Filesystem.Type.ext2)] = void;
     types[@intFromEnum(Filesystem.Type.fat32)] = FAT32.Cache;
 

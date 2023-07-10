@@ -2,7 +2,7 @@ const cpu = @import("cpu");
 const lib = @import("lib");
 const log = lib.log;
 const privileged = @import("privileged");
-const rise = @import("rise");
+const birth = @import("birth");
 
 const assert = lib.assert;
 
@@ -24,11 +24,11 @@ const pcid_mask = 1 << pcid_bit;
 /// - R10: argument 3
 /// - R8:  argument 4
 /// - R9:  argument 5
-fn riseSyscall(comptime Syscall: type, raw_arguments: rise.syscall.Arguments) Syscall.ErrorSet.Error!Syscall.Result {
+fn birthSyscall(comptime Syscall: type, raw_arguments: birth.syscall.Arguments) Syscall.ErrorSet.Error!Syscall.Result {
     cpu.syscall_count += 1;
-    comptime assert(Syscall == rise.capabilities.Syscall(Syscall.capability, Syscall.command));
-    const capability: rise.capabilities.Type = Syscall.capability;
-    const command: rise.capabilities.Command(capability) = Syscall.command;
+    comptime assert(Syscall == birth.capabilities.Syscall(Syscall.capability, Syscall.command));
+    const capability: birth.capabilities.Type = Syscall.capability;
+    const command: birth.capabilities.Command(capability) = Syscall.command;
     const arguments = try Syscall.toArguments(raw_arguments);
 
     return if (cpu.user_scheduler.capability_root_node.hasPermissions(capability, command)) switch (capability) {
@@ -78,16 +78,16 @@ fn riseSyscall(comptime Syscall: type, raw_arguments: rise.syscall.Arguments) Sy
     } else error.forbidden;
 }
 
-export fn syscall(registers: *const Registers) callconv(.C) rise.syscall.Result {
-    const options = @as(rise.syscall.Options, @bitCast(registers.syscall_number));
-    const arguments = rise.syscall.Arguments{ registers.rdi, registers.rsi, registers.rdx, registers.r10, registers.r8, registers.r9 };
+export fn syscall(registers: *const Registers) callconv(.C) birth.syscall.Result {
+    const options = @as(birth.syscall.Options, @bitCast(registers.syscall_number));
+    const arguments = birth.syscall.Arguments{ registers.rdi, registers.rsi, registers.rdx, registers.r10, registers.r8, registers.r9 };
 
     return switch (options.general.convention) {
-        .rise => switch (options.rise.type) {
-            inline else => |capability| switch (@as(rise.capabilities.Command(capability), @enumFromInt(options.rise.command))) {
+        .birth => switch (options.birth.type) {
+            inline else => |capability| switch (@as(birth.capabilities.Command(capability), @enumFromInt(options.birth.command))) {
                 inline else => |command| blk: {
-                    const Syscall = rise.capabilities.Syscall(capability, command);
-                    const result: Syscall.Result = riseSyscall(Syscall, arguments) catch |err| break :blk Syscall.errorToRaw(err);
+                    const Syscall = birth.capabilities.Syscall(capability, command);
+                    const result: Syscall.Result = birthSyscall(Syscall, arguments) catch |err| break :blk Syscall.errorToRaw(err);
                     break :blk Syscall.resultToRaw(result);
                 },
             },

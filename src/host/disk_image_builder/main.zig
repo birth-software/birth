@@ -210,7 +210,7 @@ pub fn main() anyerror!void {
                             .buffer = host.ArrayList(u8).init(wrapped_allocator.zigUnwrap()),
                         };
                         try limine_cfg_generator.addField("TIMEOUT", "0");
-                        try limine_cfg_generator.addEntryName("Rise");
+                        try limine_cfg_generator.addEntryName("Birth");
                         try limine_cfg_generator.addField("PROTOCOL", "limine");
                         try limine_cfg_generator.addField("DEFAULT_ENTRY", "0");
                         try limine_cfg_generator.addField("KERNEL_PATH", try lib.concat(wrapped_allocator.zigUnwrap(), u8, &.{ "boot:///", loader_fat_path }));
@@ -233,7 +233,7 @@ pub fn main() anyerror!void {
                         else => unreachable,
                     }
                 },
-                .rise => switch (configuration.boot_protocol) {
+                .birth => switch (configuration.boot_protocol) {
                     .bios => {
                         const partition_first_usable_lba = gpt_partition_cache.gpt.header.first_usable_lba;
                         assert((fat_partition_cache.partition_range.first_lba - partition_first_usable_lba) * disk.sector_size > lib.alignForward(usize, loader_file.len, disk.sector_size));

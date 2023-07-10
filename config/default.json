@@ -1,6 +1,6 @@
 {
     "architecture": "x86_64",
-    "bootloader": "rise",
+    "bootloader": "birth",
     "boot_protocol": "uefi",
     "execution_environment": "qemu",
     "optimize_mode": "Debug",

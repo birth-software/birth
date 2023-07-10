@@ -1,15 +1,15 @@
 const lib = @import("lib");
 const assert = lib.assert;
-const rise = @import("rise");
+const birth = @import("birth");
 
 pub const UserScheduler = extern struct {
-    generic: rise.UserScheduler,
+    generic: birth.UserScheduler,
     disabled_save_area: RegisterArena,
 };
 
 pub const RegisterArena = extern struct {
     fpu: FPU align(lib.arch.stack_alignment),
-    registers: rise.arch.Registers,
+    registers: birth.arch.Registers,
 
     pub fn contextSwitch(register_arena: *align(lib.arch.stack_alignment) const RegisterArena) noreturn {
         assert(lib.isAligned(@intFromPtr(register_arena), lib.arch.stack_alignment));
@@ -88,8 +88,8 @@ pub const Registers = extern struct {
             )
             :
             : [registers] "{rdi}" (registers),
-              [ss] "i" (rise.arch.user_data_selector),
-              [cs] "i" (rise.arch.user_code_selector),
+              [ss] "i" (birth.arch.user_data_selector),
+              [cs] "i" (birth.arch.user_code_selector),
             : "memory"
         );
 
@@ -129,9 +129,9 @@ pub const FPU = extern struct {
 pub const user_code_selector = 0x43;
 pub const user_data_selector = 0x3b;
 
-pub inline fn syscall(options: rise.syscall.Options, arguments: rise.syscall.Arguments) rise.syscall.Result {
-    var first: rise.syscall.Result.Rise.First = undefined;
-    var second: rise.syscall.Result.Rise.Second = undefined;
+pub inline fn syscall(options: birth.syscall.Options, arguments: birth.syscall.Arguments) birth.syscall.Result {
+    var first: birth.syscall.Result.Birth.First = undefined;
+    var second: birth.syscall.Result.Birth.Second = undefined;
     asm volatile (
         \\syscall
         : [rax] "={rax}" (first),
@@ -147,7 +147,7 @@ pub inline fn syscall(options: rise.syscall.Options, arguments: rise.syscall.Arg
     );
 
     return .{
-        .rise = .{
+        .birth = .{
             .first = first,
             .second = second,
         },

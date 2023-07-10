@@ -1,7 +1,7 @@
 const lib = @import("lib");
 const log = lib.log.scoped(.thread);
 const user = @import("user");
-const rise = @import("rise");
+const birth = @import("birth");
 
 const MoreCore = user.MoreCore;
 const MMUAwareVirtualAddressSpace = user.MMUAwareVirtualAddressSpace;
@@ -17,7 +17,7 @@ pub const Thread = extern struct {
     next: ?*Thread,
     stack: [*]u8,
     stack_top: [*]align(lib.arch.stack_alignment) u8,
-    register_arena: rise.arch.RegisterArena align(lib.arch.stack_alignment),
+    register_arena: birth.arch.RegisterArena align(lib.arch.stack_alignment),
     core_id: u32,
 
     pub fn init(thread: *Thread, scheduler: *user.arch.Scheduler) void {

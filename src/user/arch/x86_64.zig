@@ -1,12 +1,12 @@
 const lib = @import("lib");
 const log = lib.log;
 const assert = lib.assert;
-const rise = @import("rise");
+const birth = @import("birth");
 const user = @import("user");
 
-const FPU = rise.arch.FPU;
-const Registers = rise.arch.Registers;
-const RegisterArena = rise.arch.RegisterArena;
+const FPU = birth.arch.FPU;
+const Registers = birth.arch.Registers;
+const RegisterArena = birth.arch.RegisterArena;
 
 const VirtualAddress = lib.VirtualAddress;
 
@@ -17,7 +17,7 @@ const Thread = user.Thread;
 const VirtualAddressSpace = user.VirtualAddressSpace;
 
 pub const Scheduler = extern struct {
-    common: rise.arch.UserScheduler,
+    common: birth.arch.UserScheduler,
     generic: user.Scheduler,
 
     pub fn initDisabled(scheduler: *Scheduler) void {
@@ -50,7 +50,7 @@ pub fn _start() callconv(.Naked) noreturn {
     unreachable;
 }
 
-pub inline fn setInitialState(register_arena: *RegisterArena, entry: VirtualAddress, stack_virtual_address: VirtualAddress, arguments: rise.syscall.Arguments) void {
+pub inline fn setInitialState(register_arena: *RegisterArena, entry: VirtualAddress, stack_virtual_address: VirtualAddress, arguments: birth.syscall.Arguments) void {
     assert(stack_virtual_address.value() > lib.arch.valid_page_sizes[0]);
     assert(lib.isAligned(stack_virtual_address.value(), lib.arch.stack_alignment));
     var stack_address = stack_virtual_address;

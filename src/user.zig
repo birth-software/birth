@@ -3,9 +3,9 @@ const log = lib.log;
 const assert = lib.assert;
 const ExecutionMode = lib.Syscall.ExecutionMode;
 
-const rise = @import("rise");
-const capabilities = rise.capabilities;
-pub const Syscall = rise.capabilities.Syscall;
+const birth = @import("birth");
+const capabilities = birth.capabilities;
+pub const Syscall = birth.capabilities.Syscall;
 
 pub const arch = @import("user/arch.zig");
 const core_state = @import("user/core_state.zig");
@@ -75,7 +75,7 @@ fn schedulerInitDisabled(scheduler: *arch.Scheduler) void {
 }
 
 pub var is_init = false;
-pub var command_buffer: rise.CommandBuffer = undefined;
+pub var command_buffer: birth.CommandBuffer = undefined;
 
 pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {
     assert(arg_init);
@@ -89,7 +89,7 @@ pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) nor
     Syscall(.cpu, .shutdown).blocking({}) catch unreachable;
 }
 
-// export fn riseInitializeDisabled(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {
+// export fn birthInitializeDisabled(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {
 //     // TODO: delete when this code is unnecessary. In the meanwhile it counts as a sanity check
 //     assert(arg_init);
 //     is_init = arg_init;

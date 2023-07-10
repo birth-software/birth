@@ -1,7 +1,7 @@
 // TODO: legacy stuff; refactor when SMP is implemented
 
 // pub fn initializeSMP(bootloader_information: *Information, madt: *const ACPI.MADT) void {
-//     if (bootloader_information.bootloader != .rise) @panic("Protocol not supported");
+//     if (bootloader_information.bootloader != .birth) @panic("Protocol not supported");
 //
 //     const smp_records = bootloader_information.getSlice(.smps);
 //

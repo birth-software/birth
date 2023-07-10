@@ -2,8 +2,8 @@ const lib = @import("lib");
 const assert = lib.assert;
 const PhysicalAddress = lib.PhysicalAddress;
 
-const rise = @import("rise");
-const syscall = rise.syscall;
+const birth = @import("birth");
+const syscall = birth.syscall;
 
 const Capabilities = @This();
 
@@ -127,13 +127,13 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
                 pub const Result = usize;
                 pub const Arguments = []const u8;
 
-                inline fn toResult(raw_result: syscall.Result.Rise) Result {
+                inline fn toResult(raw_result: syscall.Result.Birth) Result {
                     return raw_result.second;
                 }
 
                 inline fn resultToRaw(result: Result) syscall.Result {
                     return syscall.Result{
-                        .rise = .{
+                        .birth = .{
                             .first = .{},
                             .second = result,
                         },
@@ -165,13 +165,13 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
                 pub const Result = u32;
                 pub const Arguments = void;
 
-                inline fn toResult(raw_result: syscall.Result.Rise) Result {
+                inline fn toResult(raw_result: syscall.Result.birth) Result {
                     return @as(Result, @intCast(raw_result.second));
                 }
 
                 inline fn resultToRaw(result: Result) syscall.Result {
                     return syscall.Result{
-                        .rise = .{
+                        .birth = .{
                             .first = .{},
                             .second = result,
                         },
@@ -188,12 +188,12 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
             .get_command_buffer => struct {
                 pub const ErrorSet = Capabilities.ErrorSet(&.{});
                 pub const Result = noreturn;
-                pub const Arguments = *rise.CommandBuffer;
+                pub const Arguments = *birth.CommandBuffer;
 
                 pub const toResult = @compileError("noreturn unexpectedly returned");
 
                 inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
-                    const ptr = @as(?*rise.CommandBuffer, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
+                    const ptr = @as(?*birth.CommandBuffer, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
                     return ptr;
                 }
 
@@ -215,13 +215,13 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
             pub const Result = PhysicalAddress;
             pub const Arguments = usize;
 
-            inline fn toResult(raw_result: syscall.Result.Rise) Result {
+            inline fn toResult(raw_result: syscall.Result.birth) Result {
                 return PhysicalAddress.new(raw_result.second);
             }
 
             inline fn resultToRaw(result: Result) syscall.Result {
                 return syscall.Result{
-                    .rise = .{
+                    .birth = .{
                         .first = .{},
                         .second = result.value(),
                     },
@@ -248,14 +248,14 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
 
                 inline fn resultToRaw(result: Result) syscall.Result {
                     return syscall.Result{
-                        .rise = .{
+                        .birth = .{
                             .first = .{},
                             .second = result,
                         },
                     };
                 }
 
-                inline fn toResult(raw_result: syscall.Result.Rise) Result {
+                inline fn toResult(raw_result: syscall.Result.birth) Result {
                     return raw_result.second;
                 }
             },
@@ -325,7 +325,7 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
                 }
 
                 break :blk syscall.Result{
-                    .rise = .{
+                    .birth = .{
                         .first = .{},
                         .second = 0,
                     },
@@ -338,7 +338,7 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
                 inline else => |comptime_error| @field(@This().ErrorSet.Enum, @errorName(comptime_error)),
             };
             return syscall.Result{
-                .rise = .{
+                .birth = .{
                     .first = .{
                         .@"error" = @intFromEnum(error_enum),
                     },
@@ -351,16 +351,16 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
         pub fn blocking(arguments: Arguments) @This().ErrorSet.Error!Result {
             const raw_arguments = if (Arguments != void) Types.argumentsToRaw(arguments) else [1]usize{0} ** raw_argument_count;
             // TODO: make this more reliable and robust?
-            const options = rise.syscall.Options{
-                .rise = .{
+            const options = birth.syscall.Options{
+                .birth = .{
                     .type = capability,
                     .command = @intFromEnum(command),
                 },
             };
 
-            const raw_result = rise.arch.syscall(options, raw_arguments);
+            const raw_result = birth.arch.syscall(options, raw_arguments);
 
-            const raw_error_value = raw_result.rise.first.@"error";
+            const raw_error_value = raw_result.birth.first.@"error";
             comptime {
                 assert(!@hasField(@This().ErrorSet.Enum, "ok"));
                 assert(!@hasField(@This().ErrorSet.Enum, "success"));
@@ -370,7 +370,7 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
             return switch (raw_error_value) {
                 success => switch (Result) {
                     noreturn => unreachable,
-                    else => toResult(raw_result.rise),
+                    else => toResult(raw_result.birth),
                 },
                 else => switch (@as(@This().ErrorSet.Enum, @enumFromInt(raw_error_value))) {
                     inline else => |comptime_error_enum| @field(@This().ErrorSet.Error, @tagName(comptime_error_enum)),

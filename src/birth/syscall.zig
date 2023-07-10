@@ -2,20 +2,20 @@ const lib = @import("lib");
 const assert = lib.assert;
 const log = lib.log.scoped(.Syscall);
 
-const rise = @import("rise");
-const capabilities = rise.capabilities;
+const birth = @import("birth");
+const capabilities = birth.capabilities;
 
 pub const argument_count = 6;
 pub const Arguments = [argument_count]usize;
 
 pub const Convention = enum(u1) {
     linux = 0,
-    rise = 1,
+    birth = 1,
 };
 
 pub const Options = extern union {
     general: General,
-    rise: Rise,
+    birth: Birth,
     linux: Linux,
 
     pub const General = packed struct(u64) {
@@ -35,17 +35,17 @@ pub const Options = extern union {
 
         pub fn NumberIntegerType(comptime convention: Convention) type {
             return switch (convention) {
-                .rise => Rise.IDInteger,
+                .birth => birth.IDInteger,
                 .linux => u64,
             };
         }
     };
 
-    pub const Rise = packed struct(u64) {
+    pub const Birth = packed struct(u64) {
         type: capabilities.Type,
         command: capabilities.Subtype,
         reserved: lib.IntType(.unsigned, @bitSizeOf(u64) - @bitSizeOf(capabilities.Type) - @bitSizeOf(capabilities.Subtype) - @bitSizeOf(Convention)) = 0,
-        convention: Convention = .rise,
+        convention: Convention = .birth,
 
         comptime {
             Options.assertSize(@This());
@@ -79,7 +79,7 @@ pub const Options = extern union {
 
 pub const Result = extern union {
     general: General,
-    rise: Rise,
+    birth: Birth,
     linux: Linux,
 
     pub const General = extern struct {
@@ -90,7 +90,7 @@ pub const Result = extern union {
         second: u64,
     };
 
-    pub const Rise = extern struct {
+    pub const Birth = extern struct {
         first: First,
         second: Second,
 
@@ -99,7 +99,7 @@ pub const Result = extern union {
             @"error": u16 = 0,
             padding2: u8 = 0,
             padding3: u7 = 0,
-            convention: Convention = .rise,
+            convention: Convention = .birth,
         };
 
         pub const Second = u64;

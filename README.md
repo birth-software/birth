@@ -1,6 +1,6 @@
-# Rise: an attempt to write a better operating system
+# Birth: an attempt to write a better operating system
 
-![Build status](https://img.shields.io/github/actions/workflow/status/davidgm94/rise/lightning.yml?branch=main)
+![Build status](https://img.shields.io/github/actions/workflow/status/birth-software/birth/lightning.yml?branch=main)
 
 An experiment of an operating system for modern 64-bit architectures which focuses on building robust, fast and usable system software and learning how to do it along the way.
 
