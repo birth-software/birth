@@ -39,29 +39,29 @@ const MountedPartition = struct {
     loopback_device: LoopbackDevice,
 
     fn mkdir(partition: MountedPartition, allocator: lib.ZigAllocator, dir: []const u8) !void {
-        try host.spawnProcess(&.{ "sudo", "mkdir", "-p", try partition.join_with_root(allocator, dir) }, allocator);
+        try host.spawnProcess(&.{ "sudo", "mkdir", "-p", try partition.joinWithRoot(allocator, dir) }, allocator);
     }
 
-    fn join_with_root(partition: MountedPartition, allocator: lib.ZigAllocator, path: []const u8) ![]const u8 {
-        const mount_dir = partition.get_mount_dir();
+    fn joinWithRoot(partition: MountedPartition, allocator: lib.ZigAllocator, path: []const u8) ![]const u8 {
+        const mount_dir = partition.getMountDir();
         const slices_to_join: []const []const u8 = if (path[0] == '/') &.{ mount_dir, path } else &.{ mount_dir, "/", path };
         const joint_path = try lib.concat(allocator, u8, slices_to_join);
         return joint_path;
     }
 
-    pub fn get_mount_dir(partition: MountedPartition) []const u8 {
-        const mount_dir = partition.loopback_device.mount_dir orelse @panic("get_mount_dir");
+    pub fn getMountDir(partition: MountedPartition) []const u8 {
+        const mount_dir = partition.loopback_device.mount_dir orelse @panic("getMountDir");
         return mount_dir;
     }
 
-    fn copy_file(partition: MountedPartition, allocator: lib.ZigAllocator, file_path: []const u8, file_content: []const u8) !void {
+    fn copyFile(partition: MountedPartition, allocator: lib.ZigAllocator, file_path: []const u8, file_content: []const u8) !void {
         // TODO: make this work for Windows?
         const last_slash_index = lib.lastIndexOf(u8, file_path, "/") orelse @panic("fat32: copy file last slash");
         const file_name = host.basename(file_path);
         assert(file_name.len > 0);
         try host.cwd().writeFile(file_name, file_content);
         const dir = file_path[0..if (last_slash_index == 0) 1 else last_slash_index];
-        const destination_dir = try partition.join_with_root(allocator, dir);
+        const destination_dir = try partition.joinWithRoot(allocator, dir);
         const mkdir_process_args = &.{ "sudo", "mkdir", "-p", destination_dir };
         try host.spawnProcess(mkdir_process_args, allocator);
         const copy_process_args = &.{ "sudo", "cp", "-v", file_name, destination_dir };
@@ -167,7 +167,7 @@ test "Limine barebones" {
             }
 
             for (limine_files) |file| {
-                try partition.copy_file(wrapped_allocator.zigUnwrap(), file.path, file.content);
+                try partition.copyFile(wrapped_allocator.zigUnwrap(), file.path, file.content);
             }
 
             try partition.end(wrapped_allocator.zigUnwrap());

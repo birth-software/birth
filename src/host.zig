@@ -57,6 +57,11 @@ pub fn allocateZeroMemory(bytes: u64) ![]align(0x1000) u8 {
 pub const ExecutionError = error{failed};
 pub fn spawnProcess(arguments: []const []const u8, allocator: lib.ZigAllocator) !void {
     var process = ChildProcess.init(arguments, allocator);
+    // std.log.err("Spawning process:", .{});
+    // for (arguments) |arg| {
+    //     std.log.err("Arg: {s}", .{arg});
+    // }
+
     process.stdout_behavior = .Ignore;
     const execution_result = try process.spawnAndWait();
 

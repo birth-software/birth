@@ -1,6 +1,6 @@
 {
     "architecture": "x86_64",
-    "bootloader": "birth",
+    "bootloader": "limine",
     "boot_protocol": "uefi",
     "execution_environment": "qemu",
     "optimize_mode": "Debug",

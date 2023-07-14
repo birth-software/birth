@@ -467,6 +467,8 @@ pub fn build(b_arg: *Build) !void {
 
                                 const user_init = user_module_list.items[0];
 
+                                const is_default = architecture == default_configuration.architecture and bootloader == default_configuration.bootloader and boot_protocol == default_configuration.boot_protocol and optimize_mode == default_configuration.optimize_mode and execution_environment == default_configuration.execution_environment and execution_type == default_configuration.execution_type;
+
                                 const runner_run = try newRunnerRunArtifact(.{
                                     .configuration = configuration,
                                     .disk_image_path = disk_image_path,
@@ -479,7 +481,9 @@ pub fn build(b_arg: *Build) !void {
                                         .is_test = is_test,
                                     },
                                     .ovmf_path = ovmf_path,
+                                    .is_default = is_default,
                                 });
+
                                 const runner_debug = try newRunnerRunArtifact(.{
                                     .configuration = configuration,
                                     .disk_image_path = disk_image_path,
@@ -492,13 +496,14 @@ pub fn build(b_arg: *Build) !void {
                                         .is_test = is_test,
                                     },
                                     .ovmf_path = ovmf_path,
+                                    .is_default = is_default,
                                 });
 
                                 if (is_test) {
                                     build_steps.test_all.dependOn(&runner_run.step);
                                 }
 
-                                if (architecture == default_configuration.architecture and bootloader == default_configuration.bootloader and boot_protocol == default_configuration.boot_protocol and optimize_mode == default_configuration.optimize_mode and execution_environment == default_configuration.execution_environment and execution_type == default_configuration.execution_type) {
+                                if (is_default) {
                                     if (is_test) {
                                         build_steps.test_run.dependOn(&runner_run.step);
                                         build_steps.test_debug.dependOn(&runner_debug.step);
@@ -592,6 +597,7 @@ fn newRunnerRunArtifact(arguments: struct {
     user_init: *CompileStep,
     qemu_options: QEMUOptions,
     ovmf_path: FileSource,
+    is_default: bool,
 }) !*RunStep {
     const runner = b.addRunArtifact(arguments.runner);
 
@@ -609,6 +615,7 @@ fn newRunnerRunArtifact(arguments: struct {
         .debug_user => runner.addArg(if (debug_user) "true" else "false"),
         .debug_loader => runner.addArg(if (debug_loader) "true" else "false"),
         .ovmf_path => runner.addFileSourceArg(arguments.ovmf_path),
+        .is_default => runner.addArg(if (arguments.is_default) "true" else "false"),
     };
 
     return runner;
