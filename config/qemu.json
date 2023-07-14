@@ -8,7 +8,6 @@
     "smp": 2,
     "debugcon": "stdio",
     "log": {
-        "file": null,
         "guest_errors": true,
         "assembly": false,
         "interrupts": true

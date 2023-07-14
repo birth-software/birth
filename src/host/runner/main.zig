@@ -22,7 +22,16 @@ const Error = error{
     architecture_not_supported,
     execution_environment_not_supported,
     ovmf_path_not_found,
+    is_default_not_found,
 };
+
+const ParseBoolError = error{
+    not_found,
+};
+
+fn parseBool(argument: []const u8) !bool {
+    return if (lib.equal(u8, argument, "true")) true else if (lib.equal(u8, argument, "false")) false else ParseBoolError.not_found;
+}
 
 pub fn main() anyerror!void {
     const max_file_length = lib.maxInt(usize);
@@ -46,6 +55,7 @@ pub fn main() anyerror!void {
         var argument_init_path: ?[]const u8 = null;
         var argument_index: usize = 0;
         var argument_ovmf_path: ?[]const u8 = null;
+        var argument_is_default: ?bool = null;
 
         while (argument_parser.next()) |argument_type| switch (argument_type) {
             .disk_image_path => {
@@ -66,7 +76,7 @@ pub fn main() anyerror!void {
 
                 argument_qemu_options = undefined;
                 inline for (lib.fields(lib.QEMUOptions), 0..) |field, field_index| {
-                    @field(argument_qemu_options.?, field.name) = if (lib.equal(u8, boolean_argument_strings[field_index], "true")) true else if (lib.equal(u8, boolean_argument_strings[field_index], "false")) false else return Error.qemu_options_not_found;
+                    @field(argument_qemu_options.?, field.name) = parseBool(boolean_argument_strings[field_index]) catch return Error.qemu_options_not_found;
                 }
             },
             .configuration => {
@@ -82,15 +92,15 @@ pub fn main() anyerror!void {
                 argument_index += 1;
             },
             .ci => {
-                argument_ci = if (lib.equal(u8, arguments[argument_index], "true")) true else if (lib.equal(u8, arguments[argument_index], "false")) false else return Error.ci_not_found;
+                argument_ci = parseBool(arguments[argument_index]) catch return Error.ci_not_found;
                 argument_index += 1;
             },
             .debug_user => {
-                argument_debug_user = if (lib.equal(u8, arguments[argument_index], "true")) true else if (lib.equal(u8, arguments[argument_index], "false")) false else return Error.debug_user_not_found;
+                argument_debug_user = parseBool(arguments[argument_index]) catch return Error.debug_user_not_found;
                 argument_index += 1;
             },
             .debug_loader => {
-                argument_debug_loader = if (lib.equal(u8, arguments[argument_index], "true")) true else if (lib.equal(u8, arguments[argument_index], "false")) false else return Error.debug_loader_not_found;
+                argument_debug_loader = parseBool(arguments[argument_index]) catch return Error.debug_loader_not_found;
                 argument_index += 1;
             },
             .init => {
@@ -99,6 +109,10 @@ pub fn main() anyerror!void {
             },
             .ovmf_path => {
                 argument_ovmf_path = arguments[argument_index];
+                argument_index += 1;
+            },
+            .is_default => {
+                argument_is_default = parseBool(arguments[argument_index]) catch return Error.is_default_not_found;
                 argument_index += 1;
             },
         };
@@ -117,12 +131,28 @@ pub fn main() anyerror!void {
             .debug_loader = argument_debug_loader orelse return Error.debug_loader_not_found,
             .init = argument_init_path orelse return Error.init_not_found,
             .ovmf_path = argument_ovmf_path orelse return Error.ovmf_path_not_found,
+            .is_default = argument_is_default orelse return Error.is_default_not_found,
         };
     };
 
     switch (arguments_result.configuration.execution_environment) {
         .qemu => {
             const qemu_options = arguments_result.qemu_options;
+
+            const unique_base_name = blk: {
+                var list = host.ArrayList(u8).init(wrapped_allocator.zigUnwrap());
+                inline for (lib.fields(Configuration)) |conf_field| {
+                    try list.appendSlice(@tagName(@field(arguments_result.configuration, conf_field.name)));
+                    try list.append('_');
+                }
+
+                break :blk list.items;
+            };
+
+            const debugcon_file = try lib.concat(wrapped_allocator.zigUnwrap(), u8, &.{ "logs/", unique_base_name, "debugcon.log" });
+            const qemu_debug_file = try lib.concat(wrapped_allocator.zigUnwrap(), u8, &.{ "logs/", unique_base_name, "debug.log" });
+            var debugcon_file_used = false;
+            var qemu_debug_file_used = false;
 
             const config_file = try host.cwd().readFileAlloc(wrapped_allocator.zigUnwrap(), "config/qemu.json", max_file_length);
             const parsed_arguments = try lib.json.parseFromSlice(Arguments, wrapped_allocator.zigUnwrap(), config_file, .{});
@@ -169,7 +199,12 @@ pub fn main() anyerror!void {
 
             if (arguments.debugcon) |debugcon| {
                 try argument_list.append("-debugcon");
-                try argument_list.append(@tagName(debugcon));
+                if (arguments_result.is_default) {
+                    try argument_list.append(@tagName(debugcon));
+                } else {
+                    debugcon_file_used = true;
+                    try argument_list.append(try lib.concat(wrapped_allocator.zigUnwrap(), u8, &.{ "file:", debugcon_file }));
+                }
             }
 
             if (arguments.memory) |memory| {
@@ -213,30 +248,29 @@ pub fn main() anyerror!void {
                     }
                 }
 
-                if (!arguments_result.ci) {
-                    if (arguments.log) |log_configuration| {
-                        var log_what = host.ArrayList(u8).init(wrapped_allocator.zigUnwrap());
+                if (arguments.log) |log_configuration| {
+                    var log_what = host.ArrayList(u8).init(wrapped_allocator.zigUnwrap());
 
-                        if (log_configuration.guest_errors) try log_what.appendSlice("guest_errors,");
-                        if (log_configuration.interrupts) try log_what.appendSlice("int,");
-                        if (!arguments_result.ci and log_configuration.assembly) try log_what.appendSlice("in_asm,");
+                    if (log_configuration.guest_errors) try log_what.appendSlice("guest_errors,");
+                    if (log_configuration.interrupts) try log_what.appendSlice("int,");
+                    if (!arguments_result.ci and log_configuration.assembly) try log_what.appendSlice("in_asm,");
 
-                        if (log_what.items.len > 0) {
-                            // Delete the last comma
-                            _ = log_what.pop();
+                    if (log_what.items.len > 0) {
+                        // Delete the last comma
+                        _ = log_what.pop();
 
-                            try argument_list.append("-d");
-                            try argument_list.append(log_what.items);
+                        try argument_list.append("-d");
+                        try argument_list.append(log_what.items);
 
-                            if (log_configuration.interrupts) {
-                                try argument_list.appendSlice(&.{ "-machine", "smm=off" });
-                            }
+                        if (log_configuration.interrupts) {
+                            try argument_list.appendSlice(&.{ "-machine", "smm=off" });
                         }
+                    }
 
-                        if (log_configuration.file) |log_file| {
-                            try argument_list.append("-D");
-                            try argument_list.append(log_file);
-                        }
+                    if (!arguments_result.is_default) {
+                        qemu_debug_file_used = true;
+                        try argument_list.append("-D");
+                        try argument_list.append(qemu_debug_file);
                     }
                 }
             }
@@ -298,6 +332,7 @@ pub fn main() anyerror!void {
             }
 
             var process = host.ChildProcess.init(argument_list.items, wrapped_allocator.zigUnwrap());
+            //process.stdout_behavior = .I;
             const result = try process.spawnAndWait();
 
             if (result == .Exited) {
@@ -310,7 +345,9 @@ pub fn main() anyerror!void {
                         const qemu_exit_code = @as(lib.QEMU.ExitCode, @enumFromInt(masked_exit_code >> 1));
 
                         switch (qemu_exit_code) {
-                            .success => return log.info("Success!", .{}),
+                            .success => {
+                                return;
+                            },
                             .failure => log.err("QEMU exited with failure code 0x{x}", .{exit_code}),
                             _ => log.err("Totally unexpected value", .{}),
                         }
@@ -318,6 +355,16 @@ pub fn main() anyerror!void {
                 } else log.err("QEMU exited with unexpected code: {}", .{exit_code});
             } else {
                 log.err("QEMU was {s}", .{@tagName(result)});
+            }
+
+            if (debugcon_file_used) {
+                const debugcon_file_content = try host.cwd().readFileAlloc(wrapped_allocator.zigUnwrap(), debugcon_file, lib.maxInt(usize));
+                @import("std").debug.print("\n{s}\n", .{debugcon_file_content});
+            }
+
+            if (qemu_debug_file_used) {
+                const debug_file_content = try host.cwd().readFileAlloc(wrapped_allocator.zigUnwrap(), qemu_debug_file, lib.maxInt(usize));
+                @import("std").debug.print("\n{s}\n", .{debug_file_content});
             }
 
             return Error.qemu_error;
@@ -348,7 +395,6 @@ const Arguments = struct {
         stdio,
     },
     log: ?struct {
-        file: ?[]const u8,
         guest_errors: bool,
         assembly: bool,
         interrupts: bool,

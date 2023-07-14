@@ -8,3 +8,4 @@ bochsout.txt
 *.hdd
 loopback_device
 tools/OVMF.fd
+logs/*.log
