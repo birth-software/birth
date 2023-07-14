@@ -193,6 +193,7 @@ pub fn build(b_arg: *Build) !void {
                 .link_libc = true,
                 .link_libcpp = false,
             },
+            // Skip it because it requires sudo privileges
             .run_native = false,
         },
     };
