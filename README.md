@@ -1,7 +1,5 @@
 # Birth: an attempt to write a better operating system
 
-![Build status](https://img.shields.io/github/actions/workflow/status/birth-software/birth/lightning.yml?branch=main)
-
 An experiment of an operating system for modern 64-bit architectures which focuses on building robust, fast and usable system software and learning how to do it along the way.
 
 The current plan is to explore the idea of the multikernel exposed in the Barrelfish and Arrakis papers (very roughly simplified, an exokernel per core). Hopefully this academic model proves worthy, resulting in a big improvement in multiple aspects. If not, a hybrid kernel model with high-performance async syscalls will be used.
