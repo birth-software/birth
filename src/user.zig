@@ -4,15 +4,16 @@ const assert = lib.assert;
 const ExecutionMode = lib.Syscall.ExecutionMode;
 
 const birth = @import("birth");
-const capabilities = birth.capabilities;
 pub const Syscall = birth.capabilities.Syscall;
 
 pub const arch = @import("user/arch.zig");
+pub const capabilities = @import("user/capabilities.zig");
 const core_state = @import("user/core_state.zig");
 pub const CoreState = core_state.CoreState;
 pub const PinnedState = core_state.PinnedState;
 pub const libc = @import("user/libc.zig");
 pub const thread = @import("user/thread.zig");
+pub const Thread = thread.Thread;
 pub const process = @import("user/process.zig");
 const vas = @import("user/virtual_address_space.zig");
 const VirtualAddress = lib.VirtualAddress;
@@ -30,7 +31,7 @@ comptime {
 pub const writer = lib.Writer(void, Writer.Error, Writer.write){ .context = {} };
 const Writer = extern struct {
     const syscall = Syscall(.io, .log);
-    const Error = Writer.syscall.ErrorSet.Error;
+    const Error = Writer.syscall.Error;
 
     fn write(_: void, bytes: []const u8) Error!usize {
         const result = try Writer.syscall.blocking(bytes);
@@ -52,16 +53,36 @@ pub fn zigPanic(message: []const u8, _: ?*lib.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn panic(comptime format: []const u8, arguments: anytype) noreturn {
-    lib.log.scoped(.PANIC).err(format, arguments);
+    var buffer: [0x100]u8 = undefined;
+    const message: []const u8 = lib.bufPrint(&buffer, format, arguments) catch "Failed to get panic message!";
     while (true) {
-        Syscall(.process, .exit).blocking(false) catch |err| log.err("Exit failed: {}", .{err});
+        Syscall(.process, .panic).blocking(.{
+            .message = message,
+            .exit_code = 1,
+        }) catch |err| log.err("Exit failed: {}", .{err});
     }
 }
 
 pub const Scheduler = extern struct {
+    current_thread: *Thread,
+    thread_queue: ?*Thread = null,
     time_slice: u32,
     core_id: u32,
     core_state: CoreState,
+    bootstrap_thread: Thread,
+
+    pub fn enqueueThread(scheduler: *Scheduler, thread_to_queue: *Thread) void {
+        // TODO: check queue
+        // TODO: defer check queue
+        if (scheduler.thread_queue) |thread_queue| {
+            _ = thread_queue;
+            @panic("TODO: enqueueThread");
+        } else {
+            scheduler.thread_queue = thread_to_queue;
+            thread_to_queue.previous = thread_to_queue;
+            thread_to_queue.next = thread_to_queue;
+        }
+    }
 };
 
 pub inline fn currentScheduler() *Scheduler {
@@ -83,10 +104,18 @@ pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) nor
     if (is_init) {
         assert(scheduler.common.generic.setup_stack_lock.load(.Monotonic));
     }
-    assert(scheduler.common.generic.disabled);
-    scheduler.initDisabled();
+
+    const frame_id = capabilities.frameCreate(lib.arch.valid_page_sizes[0]) catch |err| {
+        panic("Unable to create frame: {}", .{err});
+    };
+    _ = frame_id;
+
+    @panic("TODO: start");
+    // assert(scheduler.common.generic.disabled);
+    // scheduler.initDisabled();
+    // thread.initBootstrap(scheduler);
     // command_buffer = Syscall(.cpu, .get_command_buffer).blocking(&command_buffer) catch @panic("Unable to get command buffer");
-    Syscall(.cpu, .shutdown).blocking({}) catch unreachable;
+    // Syscall(.cpu, .shutdown).blocking({}) catch unreachable;
 }
 
 // export fn birthInitializeDisabled(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {

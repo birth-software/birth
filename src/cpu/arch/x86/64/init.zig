@@ -46,8 +46,6 @@ pub fn entryPoint() callconv(.Naked) noreturn {
           [main] "{rax}" (&main),
         : "rsp", "rbp"
     );
-
-    unreachable;
 }
 
 const InitializationError = error{
@@ -297,46 +295,123 @@ fn initialize(bootloader_information: *bootloader.Information) !noreturn {
         }
     } else @panic("Total physical region not found");
 
-    var offset: usize = 0;
+    // Quick and dirty allocator to use only in this function
+    //
 
-    cpu.driver = total_physical.region.offset(offset).address.toHigherHalfVirtualAddress().access(*align(lib.arch.valid_page_sizes[0]) cpu.Driver);
-    offset += @sizeOf(cpu.Driver);
+    const allocations = blk: {
+        const RegionAllocator = extern struct {
+            region: PhysicalMemoryRegion,
+            offset: usize = 0,
 
-    const root_capability = total_physical.region.offset(offset).address.toHigherHalfVirtualAddress().access(*cpu.capabilities.Root);
-    offset += @sizeOf(cpu.capabilities.Root);
+            const Error = error{
+                OutOfMemory,
+                not_empty,
+                misalignment,
+            };
 
-    var heap_offset: usize = 0;
-    const heap_region = total_physical.region.offset(offset);
-    assert(heap_region.size == lib.arch.valid_page_sizes[0]);
-    const host_free_ram = heap_region.offset(heap_offset).address.toHigherHalfVirtualAddress().access(*cpu.capabilities.RAM.Region);
-    host_free_ram.* = .{
-        .region = PhysicalMemoryRegion.new(.{
-            .address = total_physical.region.offset(total_to_allocate).address,
-            .size = total_physical.free_size,
-        }),
+            fn allocate(allocator: *@This(), comptime T: type) Error!*T {
+                return allocator.allocateAligned(T, null);
+            }
+
+            fn allocateAligned(allocator: *@This(), comptime T: type, comptime maybe_alignment: ?u29) Error!if (maybe_alignment) |alignment| *align(alignment) T else *T {
+                const alignment = maybe_alignment orelse @alignOf(T);
+                if (!lib.isAligned(allocator.offset, alignment)) {
+                    log.err("Allocator offset not aligned to demanded alignment: 0x{x}", .{allocator.offset});
+                    return Error.misalignment;
+                }
+
+                const physical_allocation = try allocator.allocatePhysical(@sizeOf(T));
+                return physical_allocation.address.toHigherHalfVirtualAddress().access(*align(alignment) T);
+            }
+
+            fn allocatePhysical(allocator: *@This(), size: usize) Error!PhysicalMemoryRegion {
+                if (!lib.isAligned(allocator.offset, lib.arch.valid_page_sizes[0])) {
+                    log.err("Allocator offset not page-aligned: 0x{x}", .{allocator.offset});
+                    return Error.misalignment;
+                }
+                if (!lib.isAligned(size, lib.arch.valid_page_sizes[0])) {
+                    log.err("Size not page-aligned: 0x{x}", .{size});
+                    return Error.misalignment;
+                }
+
+                var left_region = allocator.region.offset(allocator.offset);
+                allocator.offset += size;
+                return left_region.takeSlice(size) catch {
+                    log.err("takeSlice", .{});
+                    return Error.OutOfMemory;
+                };
+            }
+        };
+        var region_allocator = RegionAllocator{
+            .region = total_physical.region,
+        };
+        cpu.driver = try region_allocator.allocateAligned(cpu.Driver, lib.arch.valid_page_sizes[0]);
+        const root_capability = try region_allocator.allocate(cpu.capabilities.Root);
+        const heap_region = try region_allocator.allocatePhysical(lib.arch.valid_page_sizes[0]);
+
+        break :blk .{
+            .heap_region = heap_region,
+            .root_capability = root_capability,
+        };
     };
-    heap_offset += @sizeOf(cpu.capabilities.RAM.Region);
-    const privileged_cpu_memory = heap_region.offset(heap_offset).address.toHigherHalfVirtualAddress().access(*cpu.capabilities.RAM.Region);
-    privileged_cpu_memory.* = .{
-        .region = total_physical.region,
+
+    const root_capability = allocations.root_capability;
+    const heap_region = allocations.heap_region;
+
+    const HeapAllocator = extern struct {
+        region: VirtualMemoryRegion,
+        offset: usize = 0,
+
+        const Error = error{
+            misalignment,
+            no_space,
+        };
+
+        fn allocate(allocator: *@This(), comptime T: type) Error!*T {
+            const alignment = @alignOf(T);
+            const size = @sizeOf(T);
+
+            if (!lib.isAligned(allocator.offset, alignment)) {
+                return Error.misalignment;
+            }
+
+            if (allocator.region.size - allocator.offset < size) {
+                log.err("Region size: 0x{x}. Allocator offset: 0x{x}. Size: 0x{x}", .{ allocator.region.size, allocator.offset, size });
+                return Error.no_space;
+            }
+
+            const result = allocator.region.offset(allocator.offset).address.access(*T);
+            return result;
+        }
     };
 
-    heap_offset += @sizeOf(cpu.capabilities.RAM);
+    var heap_allocator = HeapAllocator{
+        .region = heap_region.toHigherHalfVirtualAddress(),
+    };
+    const host_free_region_list = try heap_allocator.allocate(cpu.capabilities.RegionList);
 
-    var previous_free_ram = host_free_ram;
+    log.err("PHYSICAL MAP START", .{});
+
+    _ = try host_free_region_list.append(PhysicalMemoryRegion.new(.{
+        .address = total_physical.region.offset(total_to_allocate).address,
+        .size = total_physical.free_size,
+    }));
+
+    var region_list_iterator = host_free_region_list;
+
     for (memory_map_entries, page_counters, 0..) |memory_map_entry, page_counter, index| {
         if (index == total_physical.index) continue;
 
         if (memory_map_entry.type == .usable) {
             const region = memory_map_entry.getFreeRegion(page_counter);
             if (region.size > 0) {
-                const new_free_ram = heap_region.offset(heap_offset).address.toHigherHalfVirtualAddress().access(*cpu.capabilities.RAM.Region);
-                heap_offset += @sizeOf(cpu.capabilities.RAM.Region);
-                new_free_ram.* = .{
-                    .region = region,
+                _ = region_list_iterator.append(region) catch {
+                    const new_region_list = try heap_allocator.allocate(cpu.capabilities.RegionList);
+                    region_list_iterator.metadata.next = new_region_list;
+                    new_region_list.metadata.previous = region_list_iterator;
+                    region_list_iterator = new_region_list;
+                    _ = try region_list_iterator.append(region);
                 };
-                previous_free_ram.next = new_free_ram;
-                previous_free_ram = new_free_ram;
             }
         }
     }
@@ -353,28 +428,25 @@ fn initialize(bootloader_information: *bootloader.Information) !noreturn {
             },
             .ram = .{
                 .lists = blk: {
-                    var lists = [1]?*cpu.capabilities.RAM.Region{null} ** lib.arch.reverse_valid_page_sizes.len;
-                    var free_ram_iterator: ?*cpu.capabilities.RAM.Region = host_free_ram;
-                    while (free_ram_iterator) |free_ram| {
-                        comptime assert(lib.arch.reverse_valid_page_sizes.len == 3);
-                        const next = free_ram.next;
+                    var lists = [1]cpu.capabilities.RegionList{.{}} ** lib.arch.reverse_valid_page_sizes.len;
+                    var list_iterator: ?*cpu.capabilities.RegionList = host_free_region_list;
 
-                        if (free_ram.region.size >= lib.arch.reverse_valid_page_sizes[0]) {
-                            const previous_first = lists[0];
-                            lists[0] = free_ram;
-                            free_ram.next = previous_first;
-                        } else if (free_ram.region.size >= lib.arch.reverse_valid_page_sizes[1]) {
-                            const previous_first = lists[1];
-                            lists[1] = free_ram;
-                            free_ram.next = previous_first;
-                        } else if (free_ram.region.size >= lib.arch.reverse_valid_page_sizes[2]) {
-                            const previous_first = lists[2];
-                            lists[2] = free_ram;
-                            free_ram.next = previous_first;
-                        } else unreachable;
-
-                        free_ram_iterator = next;
+                    while (list_iterator) |list| : (list_iterator = list.metadata.next) {
+                        for (list.getRegions()) |region| {
+                            // TODO: make this with inline for if possible
+                            comptime assert(lib.arch.reverse_valid_page_sizes.len == 3);
+                            const index: usize = if (region.size >= lib.arch.reverse_valid_page_sizes[0]) 0 else if (region.size >= lib.arch.reverse_valid_page_sizes[1]) 1 else if (region.size >= lib.arch.reverse_valid_page_sizes[2]) 2 else unreachable;
+                            _ = try lists[index].append(region);
+                        }
                     }
+
+                    var total_region_count: usize = 0;
+
+                    for (&lists) |*list| {
+                        total_region_count += list.metadata.count;
+                    }
+
+                    assert(total_region_count > 0);
 
                     break :blk lists;
                 },
@@ -389,8 +461,21 @@ fn initialize(bootloader_information: *bootloader.Information) !noreturn {
         .scheduler = .{
             .memory = undefined,
         },
-        .heap = cpu.capabilities.Root.Heap.new(heap_region, heap_offset),
+        .heap = cpu.capabilities.Root.Heap.new(heap_region, heap_allocator.offset),
     };
+
+    if (@intFromPtr(root_capability) == @intFromPtr(cpu.driver)) {
+        @panic("WTF: addresses match");
+    }
+
+    {
+        var assertion_count: usize = 0;
+        for (root_capability.dynamic.ram.lists) |list| {
+            assertion_count += list.metadata.count;
+        }
+
+        assert(assertion_count > 0);
+    }
 
     cpu.driver.* = .{
         .valid = true,
@@ -399,9 +484,25 @@ fn initialize(bootloader_information: *bootloader.Information) !noreturn {
         },
     };
 
+    {
+        var assertion_count: usize = 0;
+        for (root_capability.dynamic.ram.lists) |list| {
+            assertion_count += list.metadata.count;
+        }
+
+        assert(assertion_count > 0);
+    }
+
+    log.err("PHYSICAL MAP END", .{});
+
     switch (cpu.bsp) {
         true => {
             const init_module_descriptor = try bootloader_information.getFileDescriptor("init");
+            const cpu_driver_executable_descriptor = try bootloader_information.getFileDescriptor("cpu_driver");
+            const elf_file_allocation = try cpu.heap.allocate(lib.alignForward(usize, cpu_driver_executable_descriptor.content.len, lib.arch.valid_page_sizes[0]), lib.arch.valid_page_sizes[0]);
+            const elf_file = @as([*]align(lib.arch.valid_page_sizes[0]) u8, @ptrFromInt(elf_file_allocation.address))[0..elf_file_allocation.size];
+            @memcpy(elf_file[0..cpu_driver_executable_descriptor.content.len], cpu_driver_executable_descriptor.content);
+            cpu.debug_info = try lib.getDebugInformation(cpu.heap.allocator.zigUnwrap(), elf_file);
             try spawnInitBSP(init_module_descriptor.content, bootloader_information.cpu_page_tables);
         },
         false => @panic("Implement APP"),
@@ -490,8 +591,6 @@ pub fn InterruptHandler(comptime interrupt_number: u64, comptime has_error_code:
                 \\iretq
                 \\int3
                 ::: "memory");
-
-            unreachable;
         }
     }.handler;
 }
@@ -779,105 +878,6 @@ const interrupt_handlers = [256]*const fn () callconv(.Naked) noreturn{
     InterruptHandler(0xff, false),
 };
 
-const BSPEarlyAllocator = extern struct {
-    base: PhysicalAddress,
-    size: usize,
-    offset: usize,
-    allocator: Allocator = .{
-        .callbacks = .{
-            .allocate = callbackAllocate,
-        },
-    },
-    heap_first: ?*BSPHeapEntry = null,
-
-    const BSPHeapEntry = extern struct {
-        virtual_memory_region: VirtualMemoryRegion,
-        offset: usize = 0,
-        next: ?*BSPHeapEntry = null,
-
-        // pub fn create(heap: *BSPHeapEntry, comptime T: type) !*T {
-        //     _ = heap;
-        //     @panic("TODO: create");
-        // }
-
-        pub fn allocateBytes(heap: *BSPHeapEntry, size: u64, alignment: u64) ![]u8 {
-            assert(alignment < lib.arch.valid_page_sizes[0]);
-            assert(heap.virtual_memory_region.size > size);
-            if (!lib.isAligned(heap.virtual_memory_region.address.value(), alignment)) {
-                const misalignment = lib.alignForward(usize, heap.virtual_memory_region.address.value(), alignment) - heap.virtual_memory_region.address.value();
-                _ = heap.virtual_memory_region.takeSlice(misalignment);
-            }
-
-            return heap.virtual_memory_region.takeByteSlice(size);
-        }
-    };
-
-    pub fn createPageAligned(allocator: *BSPEarlyAllocator, comptime T: type) AllocatorError!*align(lib.arch.valid_page_sizes[0]) T {
-        return @as(*align(lib.arch.valid_page_sizes[0]) T, @ptrCast(try allocator.allocateBytes(@sizeOf(T), lib.arch.valid_page_sizes[0])));
-    }
-
-    pub fn allocateBytes(allocator: *BSPEarlyAllocator, size: u64, alignment: u64) AllocatorError![]align(lib.arch.valid_page_sizes[0]) u8 {
-        if (!lib.isAligned(size, lib.arch.valid_page_sizes[0])) return AllocatorError.bad_alignment;
-        if (allocator.offset + size > allocator.size) return AllocatorError.out_of_memory;
-
-        // TODO: don't trash memory
-        if (!lib.isAligned(allocator.base.offset(allocator.offset).value(), alignment)) {
-            const aligned = lib.alignForward(usize, allocator.base.offset(allocator.offset).value(), alignment);
-            allocator.offset += aligned - allocator.base.offset(allocator.offset).value();
-        }
-
-        const physical_address = allocator.base.offset(allocator.offset);
-        allocator.offset += size;
-        const slice = physical_address.toHigherHalfVirtualAddress().access([*]align(lib.arch.valid_page_sizes[0]) u8)[0..size];
-        @memset(slice, 0);
-
-        return slice;
-    }
-
-    pub fn callbackAllocate(allocator: *Allocator, size: u64, alignment: u64) Allocator.Allocate.Error!Allocator.Allocate.Result {
-        const early_allocator = @fieldParentPtr(BSPEarlyAllocator, "allocator", allocator);
-        if (alignment == lib.arch.valid_page_sizes[0] or size % lib.arch.valid_page_sizes[0] == 0) {
-            const result = early_allocator.allocateBytes(size, alignment) catch return Allocator.Allocate.Error.OutOfMemory;
-            return .{
-                .address = @intFromPtr(result.ptr),
-                .size = result.len,
-            };
-        } else if (alignment > lib.arch.valid_page_sizes[0]) {
-            @panic("WTF");
-        } else {
-            assert(size < lib.arch.valid_page_sizes[0]);
-            const heap_entry_allocation = early_allocator.allocateBytes(lib.arch.valid_page_sizes[0], lib.arch.valid_page_sizes[0]) catch return Allocator.Allocate.Error.OutOfMemory;
-            const heap_entry_region = VirtualMemoryRegion.fromByteSlice(.{
-                .slice = heap_entry_allocation,
-            });
-            const heap_entry = try early_allocator.addHeapRegion(heap_entry_region);
-            const result = try heap_entry.allocateBytes(size, alignment);
-            return .{
-                .address = @intFromPtr(result.ptr),
-                .size = result.len,
-            };
-        }
-    }
-
-    inline fn addHeapRegion(early_allocator: *BSPEarlyAllocator, region: VirtualMemoryRegion) !*BSPHeapEntry {
-        const heap_entry = region.address.access(*BSPHeapEntry);
-        const offset = @sizeOf(BSPHeapEntry);
-        heap_entry.* = .{
-            .offset = offset,
-            .virtual_memory_region = region.offset(offset),
-            .next = early_allocator.heap_first,
-        };
-
-        early_allocator.heap_first = heap_entry;
-
-        return heap_entry;
-    }
-    const AllocatorError = error{
-        out_of_memory,
-        bad_alignment,
-    };
-};
-
 const half_page_table_entry_count = @divExact(paging.page_table_entry_count, 2);
 
 fn spawnInitBSP(init_file: []const u8, cpu_page_tables: paging.CPUPageTables) !noreturn {
@@ -890,7 +890,7 @@ fn spawnInitBSP(init_file: []const u8, cpu_page_tables: paging.CPUPageTables) !n
     const init_elf = try ELF.Parser.init(init_file);
     const entry_point = init_elf.getEntryPoint();
     const program_headers = init_elf.getProgramHeaders();
-    const scheduler_common = init_scheduler.common;
+    const scheduler_common = init_scheduler.s.common;
 
     for (program_headers) |program_header| {
         if (program_header.type == .load) {
@@ -904,7 +904,7 @@ fn spawnInitBSP(init_file: []const u8, cpu_page_tables: paging.CPUPageTables) !n
                 .user = true,
             };
 
-            const segment_physical_region = try cpu.driver.getRootCapability().allocatePages(aligned_size);
+            const segment_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(aligned_size);
             try page_table_regions.map(segment_virtual_address, segment_physical_region.address, segment_physical_region.size, segment_flags);
 
             const src = init_file[program_header.offset..][0..program_header.size_in_file];
@@ -1129,6 +1129,14 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         const cpu_page_table_size = (paging.Level.count - 1) * paging.page_table_size;
         const allocation_size = page_table_regions_total_size + cpu_page_table_size;
         const allocation_alignment = 2 * paging.page_table_alignment;
+        {
+            var assertion_count: usize = 0;
+            for (cpu.driver.getRootCapability().dynamic.ram.lists) |list| {
+                assertion_count += list.metadata.count;
+            }
+
+            assert(assertion_count > 0);
+        }
         const total_region = try cpu.driver.getRootCapability().allocatePageCustomAlignment(allocation_size, allocation_alignment);
         //log.debug("Total region: (0x{x}, 0x{x})", .{ total_region.address.value(), total_region.top().value() });
         var region_slicer = total_region;
@@ -1139,7 +1147,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         };
 
         inline for (&page_table_regions.regions, 0..) |*region, index| {
-            region.* = region_slicer.takeSlice(PageTableRegions.sizes[index]);
+            region.* = try region_slicer.takeSlice(PageTableRegions.sizes[index]);
         }
 
         assert(lib.isAligned(page_table_regions.regions[0].address.value(), 2 * paging.page_table_alignment));
@@ -1195,7 +1203,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         };
     }
 
-    const scheduler_memory_physical_region = try cpu.driver.getRootCapability().allocatePages(scheduler_memory_size);
+    const scheduler_memory_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(scheduler_memory_size);
     const scheduler_memory_map_flags = .{
         .present = true,
         .write = true,
@@ -1236,9 +1244,9 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
     const src_half = (try current_address_space.getPML4TableUnchecked())[half_page_table_entry_count..][0..half_page_table_entry_count];
     @memcpy(root_page_tables[0].toHigherHalfVirtualAddress().access(paging.PML4TE)[half_page_table_entry_count..][0..half_page_table_entry_count], src_half);
 
-    const pdp = cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
-    const pd = cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
-    const pt = cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
+    const pdp = try cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
+    const pd = try cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
+    const pt = try cpu_page_table_physical_region_iterator.takeSlice(paging.page_table_size);
     assert(cpu_page_table_physical_region_iterator.size == 0);
 
     const pdp_table = pdp.toHigherHalfVirtualAddress().access(paging.PDPTE);
@@ -1298,7 +1306,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
     // log.debug("cpu indexed base: 0x{x}. top: 0x{x}", .{ @bitCast(u64, cpu_indexed_base), @bitCast(u64, cpu_indexed_top) });
 
     const support_page_table_count = @as(usize, support_pdp_table_count + support_pd_table_count + support_p_table_count);
-    const support_page_table_physical_region = try cpu.driver.getRootCapability().allocatePages(support_page_table_count * paging.page_table_size);
+    const support_page_table_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(support_page_table_count * paging.page_table_size);
     // log.debug("Support page tables: 0x{x} - 0x{x}", .{ support_page_table_physical_region.address.value(), support_page_table_physical_region.top().value() });
     // log.debug("PD table count: {}. P table count: {}", .{ support_pd_table_count, support_p_table_count });
 
@@ -1360,7 +1368,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
     }
 
     {
-        const privileged_stack_physical_region = try cpu.driver.getRootCapability().allocatePages(x86_64.capability_address_space_stack_size);
+        const privileged_stack_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(x86_64.capability_address_space_stack_size);
         const indexed_privileged_stack = @as(paging.IndexedVirtualAddress, @bitCast(x86_64.capability_address_space_stack_address.value()));
         const stack_last_page = x86_64.capability_address_space_stack_address.offset(x86_64.capability_address_space_stack_size - lib.arch.valid_page_sizes[0]);
         const indexed_privileged_stack_last_page = @as(paging.IndexedVirtualAddress, @bitCast(stack_last_page.value()));
@@ -1372,7 +1380,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
 
         const pdpte = &(try paging.accessPageTable(PhysicalAddress.new(paging.unpackAddress(pml4te)), *paging.PDPTable))[indexed_privileged_stack.PDP];
         assert(!pdpte.present);
-        const pd_table_physical_region = try cpu.driver.getRootCapability().allocatePages(paging.page_table_size);
+        const pd_table_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(paging.page_table_size);
         pdpte.* = paging.PDPTE{
             .present = true,
             .write = true,
@@ -1381,7 +1389,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
 
         const pdte = &(try paging.accessPageTable(PhysicalAddress.new(paging.unpackAddress(pdpte)), *paging.PDTable))[indexed_privileged_stack.PD];
         assert(!pdte.present);
-        const p_table_physical_region = try cpu.driver.getRootCapability().allocatePages(paging.page_table_size);
+        const p_table_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(paging.page_table_size);
         pdte.* = paging.PDTE{
             .present = true,
             .write = true,
@@ -1398,7 +1406,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         }
     }
 
-    const init_cpu_scheduler_physical_region = try cpu.driver.getRootCapability().allocatePages(@sizeOf(cpu.UserScheduler));
+    const init_cpu_scheduler_physical_region = try cpu.driver.getRootCapability().allocateRAMPrivileged(@sizeOf(cpu.UserScheduler));
     const init_cpu_scheduler_virtual_region = init_cpu_scheduler_physical_region.toHigherHalfVirtualAddress();
     const init_cpu_scheduler = init_cpu_scheduler_virtual_region.address.access(*cpu.UserScheduler);
     // log.debug("Init scheduler: 0x{x}", .{init_cpu_scheduler_virtual_region.address.value()});
@@ -1420,7 +1428,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         assert(scheduler_pdpte.present == pdp_is_inside);
 
         if (!scheduler_pdpte.present) {
-            const pdte_allocation = try cpu.driver.getRootCapability().allocatePages(paging.page_table_size);
+            const pdte_allocation = try cpu.driver.getRootCapability().allocateRAMPrivileged(paging.page_table_size);
             scheduler_pdpte.* = .{
                 .present = true,
                 .write = true,
@@ -1435,7 +1443,7 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
         const is_inside_cpu_page_table_limits = cpu_scheduler_indexed.PD >= cpu_indexed_base.PD and cpu_scheduler_indexed.PD <= cpu_indexed_top.PD;
         assert(is_inside_cpu_page_table_limits == scheduler_pdte.present);
         if (!scheduler_pdte.present) {
-            const pte_allocation = try cpu.driver.getRootCapability().allocatePages(paging.page_table_size);
+            const pte_allocation = try cpu.driver.getRootCapability().allocateRAMPrivileged(paging.page_table_size);
             scheduler_pdte.* = .{
                 .present = true,
                 .write = true,
@@ -1452,28 +1460,30 @@ fn spawnInitCommon(cpu_page_tables: paging.CPUPageTables) !SpawnInitCommonResult
     });
 
     init_cpu_scheduler.* = cpu.UserScheduler{
-        .common = user_scheduler_virtual_address.access(*birth.UserScheduler),
-        .capability_root_node = cpu.capabilities.Root{
-            .static = .{
-                .cpu = true,
-                .boot = true,
-                .process = true,
-            },
-            .dynamic = .{
-                .io = .{
-                    .debug = true,
+        .s = .{
+            .common = user_scheduler_virtual_address.access(*birth.UserScheduler),
+            .capability_root_node = cpu.capabilities.Root{
+                .static = .{
+                    .cpu = true,
+                    .boot = true,
+                    .process = true,
                 },
-                .ram = cpu.driver.getRootCapability().dynamic.ram,
-                .cpu_memory = .{
-                    .flags = .{
-                        .allocate = true,
+                .dynamic = .{
+                    .io = .{
+                        .debug = true,
                     },
+                    .ram = cpu.driver.getRootCapability().dynamic.ram,
+                    .cpu_memory = .{
+                        .flags = .{
+                            .allocate = true,
+                        },
+                    },
+                    .page_table = .{},
                 },
-                .page_table = .{},
-            },
-            .scheduler = .{
-                .handle = init_cpu_scheduler,
-                .memory = scheduler_memory_physical_region,
+                .scheduler = .{
+                    .handle = init_cpu_scheduler,
+                    .memory = scheduler_memory_physical_region,
+                },
             },
         },
     };

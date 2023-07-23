@@ -46,8 +46,6 @@ pub fn _start() callconv(.Naked) noreturn {
         :
         : [startFunction] "r" (user.start),
     );
-
-    unreachable;
 }
 
 pub inline fn setInitialState(register_arena: *RegisterArena, entry: VirtualAddress, stack_virtual_address: VirtualAddress, arguments: birth.syscall.Arguments) void {

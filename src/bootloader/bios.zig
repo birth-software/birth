@@ -68,10 +68,8 @@ pub const Disk = extern struct {
                 .segment = 0,
                 .lba = lba,
             };
-            lib.log.debug("DAP: {}", .{dap});
 
             const dap_address = @intFromPtr(&dap);
-            lib.log.debug("DAP address: 0x{x}", .{dap_address});
             const dap_offset = offset(dap_address);
             const dap_segment = segment(dap_address);
             var registers = Registers{
@@ -81,9 +79,7 @@ pub const Disk = extern struct {
                 .ds = dap_segment,
             };
 
-            lib.log.debug("Start int", .{});
             interrupt(0x13, &registers, &registers);
-            lib.log.debug("End int", .{});
 
             if (registers.eflags.flags.carry_flag) return error.read_error;
 
@@ -92,7 +88,6 @@ pub const Disk = extern struct {
             const src_slice = buffer[0..bytes_to_copy];
 
             if (maybe_provided_buffer) |provided_buffer| {
-                lib.log.debug("A", .{});
                 const dst_slice = provided_buffer[@as(usize, @intCast(provided_buffer_offset))..][0..bytes_to_copy];
 
                 // TODO: report Zig that this codegen is so bad that we have to use rep movsb instead to make it go fast
@@ -114,7 +109,7 @@ pub const Disk = extern struct {
                     @memcpy(dst_slice, src_slice);
                 }
             } else {
-                lib.log.debug("B", .{});
+                //lib.log.debug("B", .{});
             }
         }
 

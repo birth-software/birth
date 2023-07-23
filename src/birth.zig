@@ -10,7 +10,7 @@ pub const UserScheduler = extern struct {
     disabled: bool,
     has_work: bool,
     core_id: u32,
-    setup_stack: [lib.arch.valid_page_sizes[0]]u8 align(lib.arch.stack_alignment),
+    setup_stack: [lib.arch.valid_page_sizes[0] * 4]u8 align(lib.arch.stack_alignment),
     setup_stack_lock: lib.Atomic(bool),
 
     pub inline fn architectureSpecific(user_scheduler: *UserScheduler) *arch.UserScheduler {

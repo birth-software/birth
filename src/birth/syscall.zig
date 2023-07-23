@@ -5,8 +5,7 @@ const log = lib.log.scoped(.Syscall);
 const birth = @import("birth");
 const capabilities = birth.capabilities;
 
-pub const argument_count = 6;
-pub const Arguments = [argument_count]usize;
+pub const Arguments = [6]usize;
 
 pub const Convention = enum(u1) {
     linux = 0,
@@ -44,18 +43,20 @@ pub const Options = extern union {
     pub const Birth = packed struct(u64) {
         type: capabilities.Type,
         command: capabilities.Subtype,
-        reserved: lib.IntType(.unsigned, @bitSizeOf(u64) - @bitSizeOf(capabilities.Type) - @bitSizeOf(capabilities.Subtype) - @bitSizeOf(Convention)) = 0,
+        reserved: ReservedInt = 0,
         convention: Convention = .birth,
+
+        const ReservedInt = lib.IntType(.unsigned, @bitSizeOf(u64) - @bitSizeOf(capabilities.Type) - @bitSizeOf(capabilities.Subtype) - @bitSizeOf(Convention));
 
         comptime {
             Options.assertSize(@This());
         }
 
-        const IDInteger = u16;
-        pub const ID = enum(IDInteger) {
-            qemu_exit = 0,
-            print = 1,
-        };
+        // const IDInteger = u16;
+        // pub const ID = enum(IDInteger) {
+        //     qemu_exit = 0,
+        //     print = 1,
+        // };
     };
 
     pub const Linux = enum(u64) {

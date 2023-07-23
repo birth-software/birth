@@ -25,9 +25,6 @@ pub const page_size = 0x1000;
 pub const page_shifter = lib.arch.page_shifter(page_size);
 
 const privileged = @import("privileged");
-const PhysicalAddress = privileged.PhysicalAddress;
-const VirtualAddress = privileged.VirtualAddress;
-const VirtualMemoryRegion = privileged.VirtualMemoryRegion;
 const stopCPU = privileged.arch.stopCPU;
 
 pub fn panic(comptime format: []const u8, arguments: anytype) noreturn {

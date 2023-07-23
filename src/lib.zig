@@ -1,6 +1,8 @@
 const common = @import("common.zig");
 pub usingnamespace common;
 
+pub const cache_line_size = 64;
+
 pub const arch = @import("lib/arch.zig");
 /// This is done so the allocator can respect allocating from different address spaces
 pub const config = @import("lib/config.zig");
@@ -293,11 +295,13 @@ pub const Allocator = extern struct {
     };
 
     pub fn zigAllocate(context: *anyopaque, size: usize, ptr_align: u8, return_address: usize) ?[*]u8 {
-        _ = context;
-        _ = size;
-        _ = ptr_align;
         _ = return_address;
-        return null;
+        const allocator: *Allocator = @ptrCast(@alignCast(context));
+        // Not understanding why Zig API is like this:
+        const alignment = @as(u64, 1) << @as(u6, @intCast(ptr_align));
+        const result = allocator.allocateBytes(size, alignment) catch return null;
+        common.assert(result.size >= size);
+        return @ptrFromInt(result.address);
     }
 
     pub fn zigResize(context: *anyopaque, buffer: []u8, buffer_alignment: u8, new_length: usize, return_address: usize) bool {
@@ -660,11 +664,9 @@ pub fn ErrorSet(comptime error_names: []const []const u8, comptime predefined_fi
     };
 }
 
-pub fn getDebugInformation(allocator: common.ZigAllocator, elf_file: []align(common.default_sector_size) const u8) !common.ModuleDebugInfo {
+pub fn getDebugInformation(allocator: common.ZigAllocator, elf_file: []align(arch.valid_page_sizes[0]) const u8) !common.ModuleDebugInfo {
     const elf = common.elf;
-    var module_debug_info: common.ModuleDebugInfo = undefined;
-    _ = module_debug_info;
-    const hdr = @as(*const elf.Ehdr, @ptrCast(&elf_file[0]));
+    const hdr = @as(*align(1) const elf.Ehdr, @ptrCast(&elf_file[0]));
     if (!common.equal(u8, hdr.e_ident[0..4], elf.MAGIC)) return error.InvalidElfMagic;
     if (hdr.e_ident[elf.EI_VERSION] != 1) return error.InvalidElfVersion;
 
@@ -673,76 +675,92 @@ pub fn getDebugInformation(allocator: common.ZigAllocator, elf_file: []align(com
     const shoff = hdr.e_shoff;
     const str_section_off = shoff + @as(u64, hdr.e_shentsize) * @as(u64, hdr.e_shstrndx);
     const str_shdr = @as(
-        *const elf.Shdr,
-        @ptrCast(@alignCast(&elf_file[common.cast(usize, str_section_off) orelse return error.Overflow])),
+        *align(1) const elf.Shdr,
+        @ptrCast(&elf_file[common.cast(usize, str_section_off) orelse return error.Overflow]),
     );
     const header_strings = elf_file[str_shdr.sh_offset .. str_shdr.sh_offset + str_shdr.sh_size];
     const shdrs = @as(
-        [*]const elf.Shdr,
-        @ptrCast(@alignCast(&elf_file[shoff])),
+        [*]align(1) const elf.Shdr,
+        @ptrCast(&elf_file[shoff]),
     )[0..hdr.e_shnum];
 
-    var opt_debug_info: ?[]const u8 = null;
-    var opt_debug_abbrev: ?[]const u8 = null;
-    var opt_debug_str: ?[]const u8 = null;
-    var opt_debug_str_offsets: ?[]const u8 = null;
-    var opt_debug_line: ?[]const u8 = null;
-    var opt_debug_line_str: ?[]const u8 = null;
-    var opt_debug_ranges: ?[]const u8 = null;
-    var opt_debug_loclists: ?[]const u8 = null;
-    var opt_debug_rnglists: ?[]const u8 = null;
-    var opt_debug_addr: ?[]const u8 = null;
-    var opt_debug_names: ?[]const u8 = null;
-    var opt_debug_frame: ?[]const u8 = null;
+    var sections: common.dwarf.DwarfInfo.SectionArray = common.dwarf.DwarfInfo.null_section_array;
+
+    // Combine section list. This takes ownership over any owned sections from the parent scope.
+    errdefer for (sections) |section| if (section) |s| if (s.owned) allocator.free(s.data);
+
+    var separate_debug_filename: ?[]const u8 = null;
+    _ = separate_debug_filename;
+    var separate_debug_crc: ?u32 = null;
+    _ = separate_debug_crc;
 
     for (shdrs) |*shdr| {
-        if (shdr.sh_type == elf.SHT_NULL) continue;
-
+        if (shdr.sh_type == elf.SHT_NULL or shdr.sh_type == elf.SHT_NOBITS) continue;
         const name = common.sliceTo(header_strings[shdr.sh_name..], 0);
-        if (common.equal(u8, name, ".debug_info")) {
-            opt_debug_info = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_abbrev")) {
-            opt_debug_abbrev = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_str")) {
-            opt_debug_str = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_str_offsets")) {
-            opt_debug_str_offsets = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_line")) {
-            opt_debug_line = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_line_str")) {
-            opt_debug_line_str = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_ranges")) {
-            opt_debug_ranges = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_loclists")) {
-            opt_debug_loclists = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_rnglists")) {
-            opt_debug_rnglists = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_addr")) {
-            opt_debug_addr = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_names")) {
-            opt_debug_names = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_frame")) {
-            opt_debug_frame = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
+
+        if (common.equal(u8, name, ".gnu_debuglink")) {
+            @panic("WTF");
+            // const gnu_debuglink = try chopSlice(mapped_mem, shdr.sh_offset, shdr.sh_size);
+            // const debug_filename = mem.sliceTo(@as([*:0]const u8, @ptrCast(gnu_debuglink.ptr)), 0);
+            // const crc_offset = mem.alignForward(usize, @intFromPtr(&debug_filename[debug_filename.len]) + 1, 4) - @intFromPtr(gnu_debuglink.ptr);
+            // const crc_bytes = gnu_debuglink[crc_offset .. crc_offset + 4];
+            // separate_debug_crc = mem.readIntSliceNative(u32, crc_bytes);
+            // separate_debug_filename = debug_filename;
+            // continue;
         }
+
+        var section_index: ?usize = null;
+        inline for (@typeInfo(common.dwarf.DwarfSection).Enum.fields, 0..) |section, i| {
+            if (common.equal(u8, "." ++ section.name, name)) section_index = i;
+        }
+        if (section_index == null) continue;
+        if (sections[section_index.?] != null) continue;
+
+        const section_bytes = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
+        sections[section_index.?] = if ((shdr.sh_flags & elf.SHF_COMPRESSED) > 0) blk: {
+            var section_stream = common.fixedBufferStream(section_bytes);
+            var section_reader = section_stream.reader();
+            const chdr = section_reader.readStruct(elf.Chdr) catch continue;
+            if (chdr.ch_type != .ZLIB) continue;
+
+            if (true) @panic("ZLIB");
+            break :blk undefined;
+            // var zlib_stream = std.compress.zlib.decompressStream(allocator, section_stream.reader()) catch continue;
+            // defer zlib_stream.deinit();
+            //
+            // var decompressed_section = try allocator.alloc(u8, chdr.ch_size);
+            // errdefer allocator.free(decompressed_section);
+            //
+            // const read = zlib_stream.reader().readAll(decompressed_section) catch continue;
+            // assert(read == decompressed_section.len);
+            //
+            // break :blk .{
+            //     .data = decompressed_section,
+            //     .virtual_address = shdr.sh_addr,
+            //     .owned = true,
+            // };
+        } else .{
+            .data = section_bytes,
+            .virtual_address = shdr.sh_addr,
+            .owned = false,
+        };
     }
+
+    const missing_debug_info =
+        sections[@intFromEnum(common.dwarf.DwarfSection.debug_info)] == null or
+        sections[@intFromEnum(common.dwarf.DwarfSection.debug_abbrev)] == null or
+        sections[@intFromEnum(common.dwarf.DwarfSection.debug_str)] == null or
+        sections[@intFromEnum(common.dwarf.DwarfSection.debug_line)] == null;
+    common.assert(!missing_debug_info);
 
     var di = common.dwarf.DwarfInfo{
         .endian = endian,
-        .debug_info = opt_debug_info orelse return error.MissingDebugInfo,
-        .debug_abbrev = opt_debug_abbrev orelse return error.MissingDebugInfo,
-        .debug_str = opt_debug_str orelse return error.MissingDebugInfo,
-        .debug_str_offsets = opt_debug_str_offsets,
-        .debug_line = opt_debug_line orelse return error.MissingDebugInfo,
-        .debug_line_str = opt_debug_line_str,
-        .debug_ranges = opt_debug_ranges,
-        .debug_loclists = opt_debug_loclists,
-        .debug_rnglists = opt_debug_rnglists,
-        .debug_addr = opt_debug_addr,
-        .debug_names = opt_debug_names,
-        .debug_frame = opt_debug_frame,
+        .sections = sections,
+        .is_macho = false,
     };
 
     try common.dwarf.openDwarfDebugInfo(&di, allocator);
+
     return di;
 }
 
@@ -773,6 +791,14 @@ pub fn RegionInterface(comptime Region: type) type {
                 .size = info.size,
             };
         }
+
+        pub inline fn invalid() Region {
+            return Region{
+                .address = Addr.invalid(),
+                .size = 0,
+            };
+        }
+
         pub inline fn fromRaw(info: struct {
             raw_address: AddrT,
             size: AddrT,
@@ -842,15 +868,22 @@ pub fn RegionInterface(comptime Region: type) type {
             return result;
         }
 
-        pub inline fn takeSlice(region: *Region, size: AddrT) Region {
-            common.assert(size <= region.size);
-            const result = Region{
-                .address = region.address,
-                .size = size,
-            };
-            region.* = region.offset(size);
+        const TakeSliceError = error{
+            not_enough_space,
+        };
 
-            return result;
+        pub inline fn takeSlice(region: *Region, size: AddrT) !Region {
+            if (size <= region.size) {
+                const result = Region{
+                    .address = region.address,
+                    .size = size,
+                };
+                region.* = region.offset(size);
+
+                return result;
+            }
+
+            return TakeSliceError.not_enough_space;
         }
 
         pub inline fn split(region: Region, comptime count: comptime_int) [count]Region {

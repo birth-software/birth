@@ -5,7 +5,7 @@ const os = common.os;
 // Build types
 const Build = std.Build;
 const CompileStep = std.Build.CompileStep;
-const FileSource = std.Build.FileSource;
+const LazyPath = std.Build.LazyPath;
 const Module = std.Build.Module;
 const ModuleDependency = std.Build.ModuleDependency;
 const OptionsStep = std.Build.OptionsStep;
@@ -58,7 +58,7 @@ pub fn build(b_arg: *Build) !void {
         var mods = Modules{};
         inline for (comptime common.enumValues(ModuleID)) |module_id| {
             mods.modules.set(module_id, b.createModule(.{
-                .source_file = FileSource.relative(switch (module_id) {
+                .source_file = LazyPath.relative(switch (module_id) {
                     .limine_installer => "src/bootloader/limine/installer.zig",
                     else => switch (module_id) {
                         .bios, .uefi, .limine => "src/bootloader",
@@ -162,13 +162,13 @@ pub fn build(b_arg: *Build) !void {
         run_native: bool = true,
 
         const C = struct {
-            include_paths: []const []const u8,
+            include_paths: []const LazyPath,
             source_files: []const SourceFile,
             link_libc: bool,
             link_libcpp: bool,
 
             const SourceFile = struct {
-                path: []const u8,
+                path: LazyPath,
                 flags: []const []const u8,
             };
         };
@@ -183,10 +183,10 @@ pub fn build(b_arg: *Build) !void {
             .root_project_path = disk_image_root_path,
             .modules = disk_image_builder_modules,
             .c = .{
-                .include_paths = &.{"src/bootloader/limine/installables"},
+                .include_paths = &.{LazyPath.relative("src/bootloader/limine/installables")},
                 .source_files = &.{
                     .{
-                        .path = "src/bootloader/limine/installables/limine-deploy.c",
+                        .path = LazyPath.relative("src/bootloader/limine/installables/limine-deploy.c"),
                         .flags = &.{},
                     },
                 },
@@ -215,7 +215,7 @@ pub fn build(b_arg: *Build) !void {
             }
 
             for (c.source_files) |source_file| {
-                test_exe.addCSourceFile(source_file.path, source_file.flags);
+                test_exe.addCSourceFile(.{ .file = source_file.path, .flags = source_file.flags });
             }
 
             if (c.link_libc) {
@@ -301,7 +301,7 @@ pub fn build(b_arg: *Build) !void {
                     else => return Error.architecture_not_supported,
                 };
 
-                const cpu_driver_linker_script_path = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ cpu_driver_path, "/arch/", switch (architecture) {
+                const cpu_driver_linker_script_path = LazyPath.relative(try std.mem.concat(b.allocator, u8, &.{ cpu_driver_path, "/arch/", switch (architecture) {
                     .x86_64 => "x86/64",
                     .x86 => "x86/32",
                     else => @tagName(architecture),
@@ -311,7 +311,7 @@ pub fn build(b_arg: *Build) !void {
 
                 var user_module_list = try std.ArrayList(*CompileStep).initCapacity(b.allocator, user_modules.len);
                 const user_architecture_source_path = try std.mem.concat(b.allocator, u8, &.{ "src/user/arch/", @tagName(architecture), "/" });
-                const user_linker_script_path = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ user_architecture_source_path, "linker_script.ld" }));
+                const user_linker_script_path = LazyPath.relative(try std.mem.concat(b.allocator, u8, &.{ user_architecture_source_path, "linker_script.ld" }));
                 for (user_modules) |module| {
                     const user_module = try addCompileStep(.{
                         .kind = executable_kind,
@@ -353,9 +353,9 @@ pub fn build(b_arg: *Build) !void {
 
                                         executable.strip = true;
 
-                                        executable.addAssemblyFile("src/bootloader/arch/x86/64/smp_trampoline.S");
-                                        executable.addAssemblyFile(bootloader_path ++ "/unreal_mode.S");
-                                        executable.setLinkerScriptPath(FileSource.relative(bootloader_path ++ "/linker_script.ld"));
+                                        executable.addAssemblyFile(LazyPath.relative("src/bootloader/arch/x86/64/smp_trampoline.S"));
+                                        executable.addAssemblyFile(LazyPath.relative(bootloader_path ++ "/unreal_mode.S"));
+                                        executable.setLinkerScriptPath(LazyPath.relative(bootloader_path ++ "/linker_script.ld"));
                                         executable.code_model = .small;
 
                                         break :blk executable;
@@ -380,7 +380,7 @@ pub fn build(b_arg: *Build) !void {
                                     executable.strip = true;
 
                                     switch (architecture) {
-                                        .x86_64 => executable.addAssemblyFile("src/bootloader/arch/x86/64/smp_trampoline.S"),
+                                        .x86_64 => executable.addAssemblyFile(LazyPath.relative("src/bootloader/arch/x86/64/smp_trampoline.S")),
                                         else => {},
                                     }
 
@@ -405,7 +405,7 @@ pub fn build(b_arg: *Build) !void {
 
                                 executable.code_model = cpu_driver.code_model;
 
-                                executable.setLinkerScriptPath(FileSource.relative(try common.concat(b.allocator, u8, &.{ limine_loader_path ++ "arch/", @tagName(architecture), "/linker_script.ld" })));
+                                executable.setLinkerScriptPath(LazyPath.relative(try common.concat(b.allocator, u8, &.{ limine_loader_path ++ "arch/", @tagName(architecture), "/linker_script.ld" })));
 
                                 break :blk executable;
                             },
@@ -591,13 +591,13 @@ fn addFileSize(artifact: *CompileStep, comptime name: []const u8) void {
 
 fn newRunnerRunArtifact(arguments: struct {
     configuration: Configuration,
-    disk_image_path: FileSource,
+    disk_image_path: LazyPath,
     loader: *CompileStep,
     runner: *CompileStep,
     cpu_driver: *CompileStep,
     user_init: *CompileStep,
     qemu_options: QEMUOptions,
-    ovmf_path: FileSource,
+    ovmf_path: LazyPath,
     is_default: bool,
 }) !*RunStep {
     const runner = b.addRunArtifact(arguments.runner);
@@ -610,12 +610,12 @@ fn newRunnerRunArtifact(arguments: struct {
         .cpu_driver => runner.addArtifactArg(arguments.cpu_driver),
         .loader_path => runner.addArtifactArg(arguments.loader),
         .init => runner.addArtifactArg(arguments.user_init),
-        .disk_image_path => runner.addFileSourceArg(arguments.disk_image_path),
+        .disk_image_path => runner.addFileArg(arguments.disk_image_path),
         .qemu_options => inline for (common.fields(QEMUOptions)) |field| runner.addArg(if (@field(arguments.qemu_options, field.name)) "true" else "false"),
         .ci => runner.addArg(if (ci) "true" else "false"),
         .debug_user => runner.addArg(if (debug_user) "true" else "false"),
         .debug_loader => runner.addArg(if (debug_loader) "true" else "false"),
-        .ovmf_path => runner.addFileSourceArg(arguments.ovmf_path),
+        .ovmf_path => runner.addFileArg(arguments.ovmf_path),
         .is_default => runner.addArg(if (arguments.is_default) "true" else "false"),
     };
 
@@ -631,15 +631,17 @@ const ExecutableDescriptor = struct {
     modules: []const ModuleID,
 };
 
+const main_package_path = LazyPath.relative(source_root_dir);
 fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
     const main_file = try std.mem.concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/main.zig" });
     const compile_step = switch (executable_descriptor.kind) {
         .exe => blk: {
             const executable = b.addExecutable(.{
                 .name = executable_descriptor.name,
-                .root_source_file = FileSource.relative(main_file),
+                .root_source_file = LazyPath.relative(main_file),
                 .target = executable_descriptor.target,
                 .optimize = executable_descriptor.optimize_mode,
+                .main_pkg_path = main_package_path,
             });
 
             build_steps.build_all.dependOn(&executable.step);
@@ -647,13 +649,14 @@ fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
             break :blk executable;
         },
         .@"test" => blk: {
-            const test_file = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/test.zig" }));
+            const test_file = LazyPath.relative(try std.mem.concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/test.zig" }));
             const test_exe = b.addTest(.{
                 .name = executable_descriptor.name,
                 .root_source_file = test_file,
                 .target = executable_descriptor.target,
                 .optimize = executable_descriptor.optimize_mode,
                 .test_runner = if (executable_descriptor.target.os_tag) |_| main_file else null,
+                .main_pkg_path = main_package_path,
             });
 
             build_steps.build_all_tests.dependOn(&test_exe.step);
@@ -668,8 +671,6 @@ fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
     if (executable_descriptor.target.getOs().tag == .freestanding) {
         compile_step.entry_symbol_name = "_start";
     }
-
-    compile_step.setMainPkgPath(source_root_dir);
 
     for (executable_descriptor.modules) |module| {
         modules.addModule(compile_step, module);

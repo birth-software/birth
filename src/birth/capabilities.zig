@@ -7,6 +7,15 @@ const syscall = birth.syscall;
 
 const Capabilities = @This();
 
+pub const Reference = packed struct(usize) {
+    integer: usize,
+};
+
+pub const RAM = packed struct(u64) {
+    block: u32,
+    region: u32,
+};
+
 pub const Type = enum(u8) {
     io, // primitive
     cpu, // primitive
@@ -21,7 +30,7 @@ pub const Type = enum(u8) {
 
     // _,
 
-    pub const Type = u8;
+    pub const BackingType = @typeInfo(Type).Enum.tag_type;
 
     pub const Mappable = enum {
         cpu_memory,
@@ -47,6 +56,7 @@ pub fn CommandBuilder(comptime list: []const []const u8) type {
         "revoke",
         "create",
     } ++ list;
+
     const enum_fields = lib.enumAddNames(&.{}, capability_base_command_list);
 
     // TODO: make this non-exhaustive enums
@@ -75,16 +85,17 @@ pub fn Command(comptime capability: Type) type {
             "shutdown",
             "get_command_buffer",
         },
-        .ram => [_][]const u8{},
-        .cpu_memory => .{
+        .ram => .{
             "allocate",
         },
+        .cpu_memory => [_][]const u8{},
         .boot => .{
             "get_bundle_size",
             "get_bundle_file_list_size",
         },
         .process => .{
             "exit",
+            "panic",
         },
         .page_table => [_][]const u8{},
     };
@@ -94,248 +105,352 @@ pub fn Command(comptime capability: Type) type {
 
 const success = 0;
 const first_valid_error = success + 1;
-
 pub fn ErrorSet(comptime error_names: []const []const u8) type {
-    return lib.ErrorSet(error_names, &.{
-        .{
-            .name = "forbidden",
-            .value = first_valid_error + 0,
-        },
-        .{
-            .name = "corrupted_input",
-            .value = first_valid_error + 1,
-        },
-        .{
-            .name = "invalid_input",
-            .value = first_valid_error + 2,
-        },
-    });
+    const predefined_error_names = &.{ "forbidden", "corrupted_input", "invalid_input" };
+    comptime var current_error = first_valid_error;
+    comptime var predefined_errors: []const lib.Type.EnumField = &.{};
+
+    inline for (predefined_error_names) |predefined_error_name| {
+        defer current_error += 1;
+
+        predefined_errors = predefined_errors ++ .{
+            .{
+                .name = predefined_error_name,
+                .value = current_error,
+            },
+        };
+    }
+
+    return lib.ErrorSet(error_names, predefined_errors);
 }
 
 const raw_argument_count = @typeInfo(syscall.Arguments).Array.len;
 
-pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(capability_type)) type {
-    const Types = switch (capability_type) {
-        .io => switch (command_type) {
-            .copy, .mint, .retype, .delete, .revoke, .create => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = void;
-                pub const Arguments = void;
+const DefaultErrorSet = Capabilities.ErrorSet(&.{});
+const Types = struct {
+    Result: type = void,
+    Arguments: type = void,
+    ErrorSet: type = DefaultErrorSet,
+};
+
+fn Functions(comptime T: Types) type {
+    const ToArguments = fn (syscall.Arguments) callconv(.Inline) T.ErrorSet.Error!T.Arguments;
+    const FromArguments = fn (T.Arguments) callconv(.Inline) syscall.Arguments;
+
+    return switch (T.Result) {
+        else => blk: {
+            const ToResult = fn (syscall.Result.Birth) callconv(.Inline) T.Result;
+            const FromResult = fn (T.Result) callconv(.Inline) syscall.Result;
+
+            // return if (T.Result == void and T.Arguments == void and T.ErrorSet == DefaultErrorSet) struct {
+            break :blk if (T.ErrorSet == DefaultErrorSet and T.Result == void and T.Arguments == void) struct {
+                toResult: ToResult = voidToResult,
+                fromResult: FromResult = voidFromResult,
+                toArguments: ToArguments = voidToArguments,
+                fromArguments: FromArguments = voidFromArguments,
+            } else if (T.ErrorSet == DefaultErrorSet and T.Result == void) struct {
+                toResult: ToResult = voidToResult,
+                fromResult: FromResult = voidFromResult,
+                toArguments: ToArguments,
+                fromArguments: FromArguments,
+            } else if (T.ErrorSet == DefaultErrorSet and T.Arguments == void) struct {
+                toResult: ToResult,
+                fromResult: FromResult,
+                toArguments: ToArguments = voidToArguments,
+                fromArguments: FromArguments = voidFromArguments,
+            } else struct {
+                toResult: ToResult,
+                fromResult: FromResult,
+                toArguments: ToArguments,
+                fromArguments: FromArguments,
+            };
+        },
+        noreturn => if (T.ErrorSet == DefaultErrorSet and T.Arguments == void) struct {
+            toArguments: ToArguments = voidToArguments,
+            fromArguments: FromArguments = voidFromArguments,
+        } else struct {
+            toArguments: ToArguments,
+            fromArguments: FromArguments,
+        },
+    };
+}
+
+fn Descriptor(comptime T: Types) type {
+    return struct {
+        types: Types = T,
+        functions: Functions(T),
+    };
+}
+
+fn CommandDescriptor(comptime capability: Type, comptime command: Command(capability)) type {
+    return Descriptor(switch (capability) {
+        .io => switch (command) {
+            .log => .{
+                .Result = usize,
+                .Arguments = []const u8,
             },
-            .log => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = usize;
-                pub const Arguments = []const u8;
+            else => .{},
+        },
+        .ram => switch (command) {
+            .allocate => .{
+                .Result = Reference,
+                .Arguments = usize,
+                .ErrorSet = ErrorSet(&.{"OutOfMemory"}),
+            },
+            else => .{},
+        },
+        .process => switch (command) {
+            .exit => .{
+                .Result = noreturn,
+                .Arguments = bool,
+            },
+            .panic => .{
+                .Result = noreturn,
+                .Arguments = struct {
+                    message: []const u8,
+                    exit_code: u64,
+                },
+            },
+            else => .{},
+        },
+        .cpu => switch (command) {
+            .get_core_id => .{
+                .Result = u32,
+            },
+            .shutdown => .{
+                .Result = noreturn,
+            },
+            // .get_command_buffer = .{
+            // },
+            else => .{},
+        },
+        .boot => switch (command) {
+            .get_bundle_file_list_size, .get_bundle_size => .{
+                .Result = usize,
+            },
+            else => .{},
+        },
+        else => .{},
+    });
+}
 
-                inline fn toResult(raw_result: syscall.Result.Birth) Result {
-                    return raw_result.second;
-                }
+pub fn Syscall(comptime cap: Type, comptime com: Command(cap)) type {
+    const D = CommandDescriptor(cap, com);
+    const T = @as(?*const Types, @ptrCast(@typeInfo(D).Struct.fields[0].default_value)).?.*;
+    const d = D{
+        .functions = switch (cap) {
+            .ram => switch (com) {
+                .allocate => blk: {
+                    const F = struct {
+                        inline fn toResult(raw_result: syscall.Result.Birth) Reference {
+                            return @bitCast(raw_result.second);
+                        }
 
-                inline fn resultToRaw(result: Result) syscall.Result {
-                    return syscall.Result{
-                        .birth = .{
-                            .first = .{},
-                            .second = result,
-                        },
+                        inline fn fromResult(result: Reference) syscall.Result {
+                            return .{
+                                .birth = .{
+                                    .first = .{},
+                                    .second = @bitCast(result),
+                                },
+                            };
+                        }
+
+                        inline fn toArguments(raw_arguments: syscall.Arguments) T.ErrorSet.Error!usize {
+                            const size = raw_arguments[0];
+                            return size;
+                        }
+
+                        inline fn fromArguments(arguments: usize) syscall.Arguments {
+                            const result = [1]usize{arguments};
+                            return result ++ .{0} ** (raw_argument_count - result.len);
+                        }
                     };
-                }
-
-                inline fn argumentsToRaw(arguments: Arguments) syscall.Arguments {
-                    const result = [2]usize{ @intFromPtr(arguments.ptr), arguments.len };
-                    return result ++ .{0} ** (raw_argument_count - result.len);
-                }
-
-                inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
-                    const message_ptr = @as(?[*]const u8, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
-                    const message_len = raw_arguments[1];
-                    if (message_len == 0) return error.invalid_input;
-                    const message = message_ptr[0..message_len];
-                    return message;
-                }
-            },
-        },
-        .cpu => switch (command_type) {
-            .copy, .mint, .retype, .delete, .revoke, .create => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = void;
-                pub const Arguments = void;
-            },
-            .get_core_id => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = u32;
-                pub const Arguments = void;
-
-                inline fn toResult(raw_result: syscall.Result.birth) Result {
-                    return @as(Result, @intCast(raw_result.second));
-                }
-
-                inline fn resultToRaw(result: Result) syscall.Result {
-                    return syscall.Result{
-                        .birth = .{
-                            .first = .{},
-                            .second = result,
-                        },
+                    break :blk .{
+                        .toResult = F.toResult,
+                        .fromResult = F.fromResult,
+                        .toArguments = F.toArguments,
+                        .fromArguments = F.fromArguments,
                     };
-                }
+                },
+                else => .{},
             },
-            .shutdown => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = noreturn;
-                pub const Arguments = void;
+            .process => switch (com) {
+                .exit => blk: {
+                    const F = struct {
+                        inline fn toArguments(raw_arguments: syscall.Arguments) T.ErrorSet.Error!T.Arguments {
+                            const result = raw_arguments[0] != 0;
+                            return result;
+                        }
 
-                pub const toResult = @compileError("noreturn unexpectedly returned");
-            },
-            .get_command_buffer => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = noreturn;
-                pub const Arguments = *birth.CommandBuffer;
-
-                pub const toResult = @compileError("noreturn unexpectedly returned");
-
-                inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
-                    const ptr = @as(?*birth.CommandBuffer, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
-                    return ptr;
-                }
-
-                inline fn argumentsToRaw(arguments: Arguments) syscall.Arguments {
-                    const result = [1]usize{@intFromPtr(arguments)};
-                    return result ++ .{0} ** (raw_argument_count - result.len);
-                }
-            },
-        },
-        .ram => struct {
-            pub const ErrorSet = Capabilities.ErrorSet(&.{});
-            pub const Result = void;
-            pub const Arguments = void;
-        },
-        .cpu_memory => struct {
-            pub const ErrorSet = Capabilities.ErrorSet(&.{
-                "OutOfMemory",
-            });
-            pub const Result = PhysicalAddress;
-            pub const Arguments = usize;
-
-            inline fn toResult(raw_result: syscall.Result.birth) Result {
-                return PhysicalAddress.new(raw_result.second);
-            }
-
-            inline fn resultToRaw(result: Result) syscall.Result {
-                return syscall.Result{
-                    .birth = .{
-                        .first = .{},
-                        .second = result.value(),
-                    },
-                };
-            }
-
-            inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
-                const size = raw_arguments[0];
-                return size;
-            }
-
-            inline fn argumentsToRaw(arguments: Arguments) syscall.Arguments {
-                const result = [1]usize{arguments};
-                return result ++ .{0} ** (raw_argument_count - result.len);
-            }
-        },
-        .boot => switch (command_type) {
-            .get_bundle_file_list_size, .get_bundle_size => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{
-                    "buffer_too_small",
-                });
-                pub const Result = usize;
-                pub const Arguments = void;
-
-                inline fn resultToRaw(result: Result) syscall.Result {
-                    return syscall.Result{
-                        .birth = .{
-                            .first = .{},
-                            .second = result,
-                        },
+                        inline fn fromArguments(arguments: T.Arguments) syscall.Arguments {
+                            const result = [1]usize{@intFromBool(arguments)};
+                            return result ++ .{0} ** (raw_argument_count - result.len);
+                        }
                     };
-                }
+                    break :blk .{
+                        // .toResult = F.toResult,
+                        // .fromResult = F.fromResult,
+                        .toArguments = F.toArguments,
+                        .fromArguments = F.fromArguments,
+                    };
+                },
+                .panic => blk: {
+                    const F = struct {
+                        inline fn toArguments(raw_arguments: syscall.Arguments) T.ErrorSet.Error!T.Arguments {
+                            if (@as(?[*]const u8, @ptrFromInt(raw_arguments[0]))) |message_ptr| {
+                                const message_len = raw_arguments[1];
 
-                inline fn toResult(raw_result: syscall.Result.birth) Result {
-                    return raw_result.second;
-                }
-            },
-            else => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{
-                    "buffer_too_small",
-                });
-                pub const Result = void;
-                pub const Arguments = void;
-            },
-        },
-        .process => switch (command_type) {
-            .exit => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = noreturn;
-                pub const Arguments = bool;
+                                if (message_len != 0) {
+                                    const message = message_ptr[0..message_len];
+                                    const exit_code = raw_arguments[2];
 
-                inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
-                    const result = raw_arguments[0] != 0;
-                    return result;
-                }
-                inline fn argumentsToRaw(arguments: Arguments) syscall.Arguments {
-                    const result = [1]usize{@intFromBool(arguments)};
-                    return result ++ .{0} ** (raw_argument_count - result.len);
-                }
+                                    return .{
+                                        .message = message,
+                                        .exit_code = exit_code,
+                                    };
+                                }
+                            }
+
+                            return error.invalid_input;
+                        }
+
+                        inline fn fromArguments(arguments: T.Arguments) syscall.Arguments {
+                            const result: [3]usize = .{ @intFromPtr(arguments.message.ptr), arguments.message.len, arguments.exit_code };
+                            return result ++ .{0} ** (raw_argument_count - result.len);
+                        }
+                    };
+                    break :blk .{
+                        .toArguments = F.toArguments,
+                        .fromArguments = F.fromArguments,
+                    };
+                },
+                else => .{},
             },
-            else => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = void;
-                pub const Arguments = void;
+            .io => switch (com) {
+                .log => blk: {
+                    const F = struct {
+                        inline fn toResult(raw_result: syscall.Result.Birth) T.Result {
+                            return raw_result.second;
+                        }
+
+                        inline fn fromResult(result: T.Result) syscall.Result {
+                            return syscall.Result{
+                                .birth = .{
+                                    .first = .{},
+                                    .second = result,
+                                },
+                            };
+                        }
+
+                        inline fn toArguments(raw_arguments: syscall.Arguments) T.ErrorSet.Error!T.Arguments {
+                            const message_ptr = @as(?[*]const u8, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
+                            const message_len = raw_arguments[1];
+                            if (message_len == 0) return error.invalid_input;
+                            const message = message_ptr[0..message_len];
+                            return message;
+                        }
+
+                        inline fn fromArguments(arguments: T.Arguments) syscall.Arguments {
+                            const result = [2]usize{ @intFromPtr(arguments.ptr), arguments.len };
+                            return result ++ .{0} ** (raw_argument_count - result.len);
+                        }
+                    };
+                    break :blk .{
+                        .toResult = F.toResult,
+                        .fromResult = F.fromResult,
+                        .toArguments = F.toArguments,
+                        .fromArguments = F.fromArguments,
+                    };
+                },
+                else => .{},
             },
+            .cpu => switch (com) {
+                .get_core_id => blk: {
+                    const F = struct {
+                        inline fn toResult(raw_result: syscall.Result.Birth) T.Result {
+                            return @as(T.Result, @intCast(raw_result.second));
+                        }
+
+                        inline fn fromResult(result: T.Result) syscall.Result {
+                            return syscall.Result{
+                                .birth = .{
+                                    .first = .{},
+                                    .second = result,
+                                },
+                            };
+                        }
+                    };
+                    break :blk .{
+                        .toResult = F.toResult,
+                        .fromResult = F.fromResult,
+                    };
+                },
+                .shutdown => .{
+                    .toArguments = voidToArguments,
+                    .fromArguments = voidFromArguments,
+                },
+                .get_command_buffer => .{
+                    //             .get_command_buffer => struct {
+                    //                 pub const ErrorSet = Capabilities.ErrorSet(&.{});
+                    //                 pub const Result = noreturn;
+                    //                 pub const Arguments = *birth.CommandBuffer;
+                    //
+                    //                 pub const toResult = @compileError("noreturn unexpectedly returned");
+                    //
+                    //                 inline fn toArguments(raw_arguments: syscall.Arguments) !Arguments {
+                    //                     const ptr = @as(?*birth.CommandBuffer, @ptrFromInt(raw_arguments[0])) orelse return error.invalid_input;
+                    //                     return ptr;
+                    //                 }
+                    //
+                    //                 inline fn argumentsToRaw(arguments: Arguments) syscall.Arguments {
+                    //                     const result = [1]usize{@intFromPtr(arguments)};
+                    //                     return result ++ .{0} ** (raw_argument_count - result.len);
+                    //                 }
+                    //             },
+                },
+                else => .{},
+            },
+            .boot => switch (com) {
+                .get_bundle_file_list_size, .get_bundle_size => blk: {
+                    const F = struct {
+                        inline fn toResult(raw_result: syscall.Result.Birth) T.Result {
+                            return raw_result.second;
+                        }
+                        inline fn fromResult(result: T.Result) syscall.Result {
+                            return syscall.Result{
+                                .birth = .{
+                                    .first = .{},
+                                    .second = result,
+                                },
+                            };
+                        }
+                    };
+
+                    break :blk .{
+                        .toResult = F.toResult,
+                        .fromResult = F.fromResult,
+                    };
+                },
+                else => .{},
+            },
+            else => .{},
         },
-        .page_table => switch (command_type) {
-            else => struct {
-                pub const ErrorSet = Capabilities.ErrorSet(&.{});
-                pub const Result = void;
-                pub const Arguments = void;
-            },
-        },
-        // else => @compileError("TODO: " ++ @tagName(capability)),
     };
 
     return struct {
-        pub const ErrorSet = Types.ErrorSet;
-        pub const Result = Types.Result;
-        pub const Arguments = Types.Arguments;
-        pub const toResult = Types.toResult;
-        pub const toArguments = if (Arguments != void)
-            Types.toArguments
-        else
-            struct {
-                fn lambda(raw_arguments: syscall.Arguments) error{}!void {
-                    _ = raw_arguments;
-                    return {};
-                }
-            }.lambda;
-        pub const capability = capability_type;
-        pub const command = command_type;
+        pub const capability = cap;
+        pub const command = com;
+        pub const Error = T.ErrorSet.Error;
+        pub const Result = T.Result;
 
-        pub inline fn resultToRaw(result: Result) syscall.Result {
-            return if (@hasDecl(Types, "resultToRaw")) blk: {
-                comptime assert(Result != void and Result != noreturn);
-                break :blk Types.resultToRaw(result);
-            } else blk: {
-                if (Result != void) {
-                    @compileError("expected void type, got " ++ @typeName(Result) ++ ". You forgot to implement a resultToRaw function" ++ " for (" ++ @tagName(capability) ++ ", " ++ @tagName(command) ++ ").");
-                }
+        pub const toResult = d.functions.toResult;
+        pub const fromResult = d.functions.fromResult;
+        pub const toArguments = d.functions.toArguments;
+        pub const fromArguments = d.functions.fromArguments;
 
-                break :blk syscall.Result{
-                    .birth = .{
-                        .first = .{},
-                        .second = 0,
-                    },
-                };
-            };
-        }
-
-        pub inline fn errorToRaw(err: @This().ErrorSet.Error) syscall.Result {
+        pub inline fn fromError(err: Error) syscall.Result {
             const error_enum = switch (err) {
-                inline else => |comptime_error| @field(@This().ErrorSet.Enum, @errorName(comptime_error)),
+                inline else => |comptime_error| @field(T.ErrorSet.Enum, @errorName(comptime_error)),
             };
             return syscall.Result{
                 .birth = .{
@@ -347,9 +462,8 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
             };
         }
 
-        /// This is not meant to be called in the CPU driver
-        pub fn blocking(arguments: Arguments) @This().ErrorSet.Error!Result {
-            const raw_arguments = if (Arguments != void) Types.argumentsToRaw(arguments) else [1]usize{0} ** raw_argument_count;
+        pub fn blocking(arguments: T.Arguments) Error!Result {
+            const raw_arguments = d.functions.fromArguments(arguments);
             // TODO: make this more reliable and robust?
             const options = birth.syscall.Options{
                 .birth = .{
@@ -362,20 +476,46 @@ pub fn Syscall(comptime capability_type: Type, comptime command_type: Command(ca
 
             const raw_error_value = raw_result.birth.first.@"error";
             comptime {
-                assert(!@hasField(@This().ErrorSet.Enum, "ok"));
-                assert(!@hasField(@This().ErrorSet.Enum, "success"));
-                assert(lib.enumFields(@This().ErrorSet.Enum)[0].value == first_valid_error);
+                assert(lib.enumFields(T.ErrorSet.Enum)[0].value == first_valid_error);
             }
 
             return switch (raw_error_value) {
-                success => switch (Result) {
+                success => switch (T.Result) {
                     noreturn => unreachable,
-                    else => toResult(raw_result.birth),
+                    else => d.functions.toResult(raw_result.birth),
                 },
-                else => switch (@as(@This().ErrorSet.Enum, @enumFromInt(raw_error_value))) {
-                    inline else => |comptime_error_enum| @field(@This().ErrorSet.Error, @tagName(comptime_error_enum)),
+                else => switch (@as(T.ErrorSet.Enum, @enumFromInt(raw_error_value))) {
+                    inline else => |comptime_error_enum| @field(Error, @tagName(comptime_error_enum)),
                 },
             };
         }
+
+        pub fn buffer(command_buffer: *birth.CommandBuffer, arguments: T.Arguments) void {
+            _ = arguments;
+            _ = command_buffer;
+
+            @panic("TODO: buffer");
+        }
     };
+}
+
+inline fn voidToResult(raw_result: syscall.Result.Birth) void {
+    _ = raw_result;
+
+    @panic("TODO: voidToResult");
+}
+
+inline fn voidFromResult(result: void) syscall.Result {
+    _ = result;
+
+    @panic("TODO: voidFromResult");
+}
+
+inline fn voidToArguments(raw_arguments: syscall.Arguments) DefaultErrorSet.Error!void {
+    _ = raw_arguments;
+}
+
+inline fn voidFromArguments(arguments: void) syscall.Arguments {
+    _ = arguments;
+    return [6]usize{0};
 }
