@@ -2,18 +2,14 @@ const lib = @import("lib");
 const assert = lib.assert;
 const birth = @import("birth");
 
-pub const UserScheduler = extern struct {
-    generic: birth.UserScheduler,
-    disabled_save_area: RegisterArena,
-};
-
 pub const RegisterArena = extern struct {
     fpu: FPU align(lib.arch.stack_alignment),
     registers: birth.arch.Registers,
 
+    pub const alignment = lib.arch.stack_alignment;
+
     pub fn contextSwitch(register_arena: *align(lib.arch.stack_alignment) const RegisterArena) noreturn {
         assert(lib.isAligned(@intFromPtr(register_arena), lib.arch.stack_alignment));
-        //lib.log.debug("ASDASD: {}", .{register_arena});
         register_arena.fpu.load();
         register_arena.registers.restore();
     }
@@ -129,9 +125,9 @@ pub const FPU = extern struct {
 pub const user_code_selector = 0x43;
 pub const user_data_selector = 0x3b;
 
-pub inline fn syscall(options: birth.syscall.Options, arguments: birth.syscall.Arguments) birth.syscall.Result {
-    var first: birth.syscall.Result.Birth.First = undefined;
-    var second: birth.syscall.Result.Birth.Second = undefined;
+pub inline fn syscall(options: birth.interface.Raw.Options, arguments: birth.interface.Raw.Arguments) birth.interface.Raw.Result {
+    var first: birth.interface.Raw.Result.Birth.First = undefined;
+    var second: birth.interface.Raw.Result.Birth.Second = undefined;
     asm volatile (
         \\syscall
         : [rax] "={rax}" (first),
@@ -153,3 +149,28 @@ pub inline fn syscall(options: birth.syscall.Options, arguments: birth.syscall.A
         },
     };
 }
+
+pub const PageTable = extern struct {
+    /// The frame that holds the memory of this page table
+    frame: birth.interface.RAM,
+    flags: packed struct(u8) {
+        level: Level4, // TODO: move to other
+        granularity: Granularity,
+        reserved: u4 = 0,
+    },
+
+    pub const Granularity = enum(u2) {
+        @"4_kb",
+        @"2_mb",
+        @"1_gb",
+    };
+
+    pub const Level4 = enum(u2) {
+        PML4 = 0,
+        PDP = 1,
+        PD = 2,
+        PT = 3,
+
+        pub const count = lib.enumCount(@This());
+    };
+};

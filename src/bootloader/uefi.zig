@@ -8,13 +8,14 @@ const uefi = lib.uefi;
 pub const BootServices = uefi.tables.BootServices;
 pub const ConfigurationTable = uefi.tables.ConfigurationTable;
 pub const Error = Status.EfiError;
-pub const FileInfo = uefi.protocols.FileInfo;
-pub const FileProtocol = uefi.protocols.FileProtocol;
-pub const GraphicsOutputProtocol = uefi.protocols.GraphicsOutputProtocol;
-pub const LoadedImageProtocol = uefi.protocols.LoadedImageProtocol;
+pub const FileInfo = uefi.FileInfo;
+// pub const FileProtocol = protocol.FileProtocol;
+// pub const GraphicsOutputProtocol = protocol.GraphicsOutputProtocol;
+// pub const LoadedImageProtocol = protocol.LoadedImageProtocol;
+// pub const SimpleFilesystemProtocol = protocol.SimpleFileSystemProtocol;
 pub const Handle = uefi.Handle;
 pub const MemoryDescriptor = uefi.tables.MemoryDescriptor;
-pub const SimpleFilesystemProtocol = uefi.protocols.SimpleFileSystemProtocol;
+pub const protocol = uefi.protocol;
 pub const Status = uefi.Status;
 pub const SystemTable = uefi.tables.SystemTable;
 pub const Try = Status.err;
@@ -25,9 +26,6 @@ pub const page_size = 0x1000;
 pub const page_shifter = lib.arch.page_shifter(page_size);
 
 const privileged = @import("privileged");
-const PhysicalAddress = privileged.PhysicalAddress;
-const VirtualAddress = privileged.VirtualAddress;
-const VirtualMemoryRegion = privileged.VirtualMemoryRegion;
 const stopCPU = privileged.arch.stopCPU;
 
 pub fn panic(comptime format: []const u8, arguments: anytype) noreturn {

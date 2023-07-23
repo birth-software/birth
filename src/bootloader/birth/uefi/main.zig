@@ -14,16 +14,13 @@ const uefi = @import("uefi");
 const BootloaderInformation = uefi.BootloaderInformation;
 const BootServices = uefi.BootServices;
 const ConfigurationTable = uefi.ConfigurationTable;
-const FileProtocol = uefi.FileProtocol;
 const Handle = uefi.Handle;
-const LoadedImageProtocol = uefi.LoadedImageProtocol;
 const LoadKernelFunction = uefi.LoadKernelFunction;
 const MemoryCategory = uefi.MemoryCategory;
 const MemoryDescriptor = uefi.MemoryDescriptor;
 const ProgramSegment = uefi.ProgramSegment;
 const Protocol = uefi.Protocol;
 const page_table_estimated_size = uefi.page_table_estimated_size;
-const SimpleFilesystemProtocol = uefi.SimpleFilesystemProtocol;
 const SystemTable = uefi.SystemTable;
 
 const privileged = @import("privileged");
@@ -68,7 +65,7 @@ pub fn panic(message: []const u8, _: ?*lib.StackTrace, _: ?usize) noreturn {
 }
 
 const Filesystem = extern struct {
-    root: *FileProtocol,
+    root: *uefi.protocol.File,
     buffer: [0x200 * 10]u8 = undefined,
 
     pub fn deinitialize(filesystem: *Filesystem) !void {
@@ -91,7 +88,7 @@ const Filesystem = extern struct {
     }
 
     const FileDescriptor = struct {
-        handle: *FileProtocol,
+        handle: *uefi.protocol.File,
         path_size: u32,
     };
 
@@ -111,14 +108,14 @@ const Filesystem = extern struct {
             return Error.boot_services_exited;
         }
 
-        var file: *FileProtocol = undefined;
+        var file: *uefi.protocol.File = undefined;
         var path_buffer: [256:0]u16 = undefined;
         const length = try lib.unicode.utf8ToUtf16Le(&path_buffer, file_path);
         path_buffer[length] = 0;
         const path = path_buffer[0..length :0];
         const uefi_path = if (path[0] == '/') path[1..] else path;
 
-        try uefi.Try(filesystem.root.open(&file, uefi_path, FileProtocol.efi_file_mode_read, 0));
+        try uefi.Try(filesystem.root.open(&file, uefi_path, uefi.protocol.File.efi_file_mode_read, 0));
 
         const result = FileDescriptor{
             .handle = file,
@@ -236,16 +233,16 @@ const Initialization = struct {
             },
             .filesystem = .{
                 .root = blk: {
-                    const loaded_image = try Protocol.open(LoadedImageProtocol, boot_services, handle);
-                    const filesystem_protocol = try Protocol.open(SimpleFilesystemProtocol, boot_services, loaded_image.device_handle orelse @panic("No device handle"));
+                    const loaded_image = try Protocol.open(uefi.protocol.LoadedImage, boot_services, handle);
+                    const filesystem_protocol = try Protocol.open(uefi.protocol.SimpleFileSystem, boot_services, loaded_image.device_handle orelse @panic("No device handle"));
 
-                    var root: *FileProtocol = undefined;
+                    var root: *uefi.protocol.File = undefined;
                     try uefi.Try(filesystem_protocol.openVolume(&root));
                     break :blk root;
                 },
             },
             .framebuffer = blk: {
-                const gop = try Protocol.locate(uefi.GraphicsOutputProtocol, boot_services);
+                const gop = try Protocol.locate(uefi.protocol.GraphicsOutput, boot_services);
 
                 const pixel_format_info: struct {
                     red_color_mask: bootloader.Framebuffer.ColorMask,
@@ -253,20 +250,19 @@ const Initialization = struct {
                     green_color_mask: bootloader.Framebuffer.ColorMask,
                     bpp: u8,
                 } = switch (gop.mode.info.pixel_format) {
-                    .PixelRedGreenBlueReserved8BitPerColor => .{
+                    .RedGreenBlueReserved8BitPerColor => .{
                         .red_color_mask = .{ .size = 8, .shift = 0 },
                         .green_color_mask = .{ .size = 8, .shift = 8 },
                         .blue_color_mask = .{ .size = 8, .shift = 16 },
                         .bpp = 32,
                     },
-                    .PixelBlueGreenRedReserved8BitPerColor => .{
+                    .BlueGreenRedReserved8BitPerColor => .{
                         .red_color_mask = .{ .size = 8, .shift = 16 },
                         .green_color_mask = .{ .size = 8, .shift = 8 },
                         .blue_color_mask = .{ .size = 8, .shift = 0 },
                         .bpp = 32,
                     },
-                    .PixelBitMask, .PixelBltOnly => @panic("Unsupported pixel format"),
-                    .PixelFormatMax => @panic("Corrupted pixel format"),
+                    .BitMask, .BltOnly => @panic("Unsupported pixel format"),
                 };
 
                 break :blk bootloader.Framebuffer{

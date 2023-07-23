@@ -1,31 +1,45 @@
 const std = @import("std");
-const common = @import("src/common.zig");
-const os = common.os;
+const ArrayList = std.ArrayList;
+const assert = std.debug.assert;
+const concat = std.mem.concat;
+const cwd = std.fs.cwd;
+const Cpu = Target.Cpu;
+const CrossTarget = std.zig.CrossTarget;
+const EnumArray = std.EnumArray;
+const enumValues = std.enums.values;
+const fields = std.meta.fields;
+const json = std.json;
+const maxInt = std.math.maxInt;
+const OptimizeMode = std.builtin.OptimizeMode;
+const Target = std.Target;
 
 // Build types
 const Build = std.Build;
-const CompileStep = std.Build.CompileStep;
-const FileSource = std.Build.FileSource;
-const Module = std.Build.Module;
-const ModuleDependency = std.Build.ModuleDependency;
-const OptionsStep = std.Build.OptionsStep;
-const RunStep = std.Build.RunStep;
-const Step = std.Build.Step;
+const CompileStep = Build.CompileStep;
+const LazyPath = Build.LazyPath;
+const Module = Build.Module;
+const ModuleDependency = Build.ModuleDependency;
+const OptionsStep = Build.OptionsStep;
+const RunStep = Build.RunStep;
+const Step = Build.Step;
 
-const assert = std.debug.assert;
+const builtin = @import("builtin");
+const os = builtin.os.tag;
+const cpu = builtin.cpu;
+
+const common = @import("src/common.zig");
+const ArgumentParser = common.ArgumentParser;
 const Bootloader = common.Bootloader;
+const canVirtualizeWithQEMU = common.canVirtualizeWithQEMU;
 const Configuration = common.Configuration;
-const Cpu = common.Cpu;
-const CrossTarget = common.CrossTarget;
 const DiskType = common.DiskType;
 const ExecutionType = common.ExecutionType;
 const ExecutionEnvironment = common.ExecutionEnvironment;
 const FilesystemType = common.FilesystemType;
-const OptimizeMode = common.OptimizeMode;
+const ImageConfig = common.ImageConfig;
 const QEMUOptions = common.QEMUOptions;
-const BirthProgram = common.BirthProgram;
 const Suffix = common.Suffix;
-const Target = common.Target;
+const TraditionalExecutionMode = common.TraditionalExecutionMode;
 
 const Error = error{
     not_implemented,
@@ -44,8 +58,86 @@ var modules = Modules{};
 var b: *Build = undefined;
 var build_steps: *BuildSteps = undefined;
 var default_configuration: Configuration = undefined;
-var user_modules: []const common.Module = undefined;
+var user_modules: []const UserModule = undefined;
 var options = Options{};
+
+const supported_architectures = [_]Cpu.Arch{
+    .x86_64,
+    //.aarch64,
+    //.riscv64,
+};
+
+fn architectureIndex(comptime arch: Cpu.Arch) comptime_int {
+    inline for (supported_architectures, 0..) |architecture, index| {
+        if (arch == architecture) return index;
+    }
+
+    @compileError("Architecture not found");
+}
+
+const ArchitectureBootloader = struct {
+    id: Bootloader,
+    protocols: []const Bootloader.Protocol,
+};
+
+const architecture_bootloader_map = blk: {
+    var array: [supported_architectures.len][]const ArchitectureBootloader = undefined;
+
+    array[architectureIndex(.x86_64)] = &.{
+        .{
+            .id = .birth,
+            .protocols = &.{ .bios, .uefi },
+        },
+        .{
+            .id = .limine,
+            .protocols = &.{ .bios, .uefi },
+        },
+    };
+
+    // array[architectureIndex(.aarch64)] = &.{
+    //     .{
+    //         .id = .birth,
+    //         .protocols = &.{.uefi},
+    //     },
+    //     .{
+    //         .id = .limine,
+    //         .protocols = &.{.uefi},
+    //     },
+    // };
+
+    // array[architectureIndex(.riscv64)] = &.{
+    //     .{
+    //         .id = .birth,
+    //         .protocols = &.{.uefi},
+    //     },
+    // };
+
+    break :blk array;
+};
+
+pub const UserModule = struct {
+    package: UserPackage,
+    name: []const u8,
+};
+pub const UserPackage = struct {
+    kind: Kind,
+    dependencies: []const Dependency,
+
+    pub const Kind = enum {
+        zig_exe,
+    };
+
+    pub const Dependency = struct {
+        foo: u64 = 0,
+    };
+};
+
+pub const BirthProgram = enum {
+    bootloader,
+    cpu,
+    user,
+    host,
+};
 
 pub fn build(b_arg: *Build) !void {
     b = b_arg;
@@ -56,9 +148,9 @@ pub fn build(b_arg: *Build) !void {
     const default_cfg_override = b.option([]const u8, "default", "Default configuration JSON file") orelse "config/default.json";
     modules = blk: {
         var mods = Modules{};
-        inline for (comptime common.enumValues(ModuleID)) |module_id| {
+        inline for (comptime enumValues(ModuleID)) |module_id| {
             mods.modules.set(module_id, b.createModule(.{
-                .source_file = FileSource.relative(switch (module_id) {
+                .source_file = LazyPath.relative(switch (module_id) {
                     .limine_installer => "src/bootloader/limine/installer.zig",
                     else => switch (module_id) {
                         .bios, .uefi, .limine => "src/bootloader",
@@ -93,12 +185,12 @@ pub fn build(b_arg: *Build) !void {
     };
 
     default_configuration = blk: {
-        const default_json_file = try std.fs.cwd().readFileAlloc(b.allocator, default_cfg_override, common.maxInt(usize));
-        const parsed_cfg = try std.json.parseFromSlice(Configuration, b.allocator, default_json_file, .{});
+        const default_json_file = try cwd().readFileAlloc(b.allocator, default_cfg_override, maxInt(usize));
+        const parsed_cfg = try json.parseFromSlice(Configuration, b.allocator, default_json_file, .{});
         const cfg = parsed_cfg.value;
 
         const optimize_mode = b.option(
-            std.builtin.Mode,
+            OptimizeMode,
             "optimize",
             "Prioritize performance, safety, or binary size (-O flag)",
         ) orelse cfg.optimize_mode;
@@ -162,13 +254,13 @@ pub fn build(b_arg: *Build) !void {
         run_native: bool = true,
 
         const C = struct {
-            include_paths: []const []const u8,
+            include_paths: []const LazyPath,
             source_files: []const SourceFile,
             link_libc: bool,
             link_libcpp: bool,
 
             const SourceFile = struct {
-                path: []const u8,
+                path: LazyPath,
                 flags: []const []const u8,
             };
         };
@@ -183,10 +275,10 @@ pub fn build(b_arg: *Build) !void {
             .root_project_path = disk_image_root_path,
             .modules = disk_image_builder_modules,
             .c = .{
-                .include_paths = &.{"src/bootloader/limine/installables"},
+                .include_paths = &.{LazyPath.relative("src/bootloader/limine/installables")},
                 .source_files = &.{
                     .{
-                        .path = "src/bootloader/limine/installables/limine-deploy.c",
+                        .path = LazyPath.relative("src/bootloader/limine/installables/limine-deploy.c"),
                         .flags = &.{},
                     },
                 },
@@ -200,7 +292,7 @@ pub fn build(b_arg: *Build) !void {
 
     const native_test_optimize_mode = .ReleaseFast;
     for (native_tests) |native_test| {
-        const test_name = try std.mem.concat(b.allocator, u8, &.{ native_test.name, "_", @tagName(native_test_optimize_mode) });
+        const test_name = try concat(b.allocator, u8, &.{ native_test.name, "_", @tagName(native_test_optimize_mode) });
         const test_exe = try addCompileStep(.{
             .name = test_name,
             .root_project_path = native_test.root_project_path,
@@ -215,7 +307,7 @@ pub fn build(b_arg: *Build) !void {
             }
 
             for (c.source_files) |source_file| {
-                test_exe.addCSourceFile(source_file.path, source_file.flags);
+                test_exe.addCSourceFile(.{ .file = source_file.path, .flags = source_file.flags });
             }
 
             if (c.link_libc) {
@@ -247,20 +339,20 @@ pub fn build(b_arg: *Build) !void {
     const ovmf_path = ovmf_downloader_run_step.addOutputFileArg("OVMF.fd");
 
     {
-        var user_module_list = std.ArrayList(common.Module).init(b.allocator);
-        var user_program_dir = try std.fs.cwd().openIterableDir(user_program_dir_path, .{ .access_sub_paths = true });
+        var user_module_list = ArrayList(UserModule).init(b.allocator);
+        var user_program_dir = try cwd().openIterableDir(user_program_dir_path, .{ .access_sub_paths = true });
         defer user_program_dir.close();
 
         var user_program_iterator = user_program_dir.iterate();
 
         while (try user_program_iterator.next()) |entry| {
             const dir_name = entry.name;
-            const file_path = try std.mem.concat(b.allocator, u8, &.{ dir_name, "/module.json" });
-            const file = try user_program_dir.dir.readFileAlloc(b.allocator, file_path, common.maxInt(usize));
-            const parsed_user_program = try std.json.parseFromSlice(common.UserProgram, b.allocator, file, .{});
-            const user_program = parsed_user_program.value;
+            const file_path = try concat(b.allocator, u8, &.{ dir_name, "/module.json" });
+            const file = try user_program_dir.dir.readFileAlloc(b.allocator, file_path, maxInt(usize));
+            const parsed_user_package = try json.parseFromSlice(UserPackage, b.allocator, file, .{});
+            const user_package = parsed_user_package.value;
             try user_module_list.append(.{
-                .program = user_program,
+                .package = user_package,
                 .name = b.dupe(dir_name), // we have to dupe here otherwise Windows CI fails
             });
         }
@@ -270,8 +362,8 @@ pub fn build(b_arg: *Build) !void {
 
     const executable_kinds = [2]CompileStep.Kind{ .exe, .@"test" };
 
-    for (common.enumValues(OptimizeMode)) |optimize_mode| {
-        for (common.supported_architectures, 0..) |architecture, architecture_index| {
+    for (enumValues(OptimizeMode)) |optimize_mode| {
+        for (supported_architectures, 0..) |architecture, architecture_index| {
             const user_target = try getTarget(architecture, .user);
 
             for (executable_kinds) |executable_kind| {
@@ -301,7 +393,7 @@ pub fn build(b_arg: *Build) !void {
                     else => return Error.architecture_not_supported,
                 };
 
-                const cpu_driver_linker_script_path = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ cpu_driver_path, "/arch/", switch (architecture) {
+                const cpu_driver_linker_script_path = LazyPath.relative(try concat(b.allocator, u8, &.{ cpu_driver_path, "/arch/", switch (architecture) {
                     .x86_64 => "x86/64",
                     .x86 => "x86/32",
                     else => @tagName(architecture),
@@ -309,14 +401,14 @@ pub fn build(b_arg: *Build) !void {
 
                 cpu_driver.setLinkerScriptPath(cpu_driver_linker_script_path);
 
-                var user_module_list = try std.ArrayList(*CompileStep).initCapacity(b.allocator, user_modules.len);
-                const user_architecture_source_path = try std.mem.concat(b.allocator, u8, &.{ "src/user/arch/", @tagName(architecture), "/" });
-                const user_linker_script_path = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ user_architecture_source_path, "linker_script.ld" }));
+                var user_module_list = try ArrayList(*CompileStep).initCapacity(b.allocator, user_modules.len);
+                const user_architecture_source_path = try concat(b.allocator, u8, &.{ "src/user/arch/", @tagName(architecture), "/" });
+                const user_linker_script_path = LazyPath.relative(try concat(b.allocator, u8, &.{ user_architecture_source_path, "linker_script.ld" }));
                 for (user_modules) |module| {
                     const user_module = try addCompileStep(.{
                         .kind = executable_kind,
                         .name = module.name,
-                        .root_project_path = try std.mem.concat(b.allocator, u8, &.{ user_program_dir_path, "/", module.name }),
+                        .root_project_path = try concat(b.allocator, u8, &.{ user_program_dir_path, "/", module.name }),
                         .target = user_target,
                         .optimize_mode = optimize_mode,
                         .modules = &.{ .lib, .user, .birth },
@@ -328,7 +420,7 @@ pub fn build(b_arg: *Build) !void {
                     user_module_list.appendAssumeCapacity(user_module);
                 }
 
-                const bootloaders = common.architecture_bootloader_map[architecture_index];
+                const bootloaders = architecture_bootloader_map[architecture_index];
                 for (bootloaders) |bootloader_struct| {
                     const bootloader = bootloader_struct.id;
                     for (bootloader_struct.protocols) |boot_protocol| {
@@ -353,9 +445,9 @@ pub fn build(b_arg: *Build) !void {
 
                                         executable.strip = true;
 
-                                        executable.addAssemblyFile("src/bootloader/arch/x86/64/smp_trampoline.S");
-                                        executable.addAssemblyFile(bootloader_path ++ "/unreal_mode.S");
-                                        executable.setLinkerScriptPath(FileSource.relative(bootloader_path ++ "/linker_script.ld"));
+                                        executable.addAssemblyFile(LazyPath.relative("src/bootloader/arch/x86/64/smp_trampoline.S"));
+                                        executable.addAssemblyFile(LazyPath.relative(bootloader_path ++ "/unreal_mode.S"));
+                                        executable.setLinkerScriptPath(LazyPath.relative(bootloader_path ++ "/linker_script.ld"));
                                         executable.code_model = .small;
 
                                         break :blk executable;
@@ -380,7 +472,7 @@ pub fn build(b_arg: *Build) !void {
                                     executable.strip = true;
 
                                     switch (architecture) {
-                                        .x86_64 => executable.addAssemblyFile("src/bootloader/arch/x86/64/smp_trampoline.S"),
+                                        .x86_64 => executable.addAssemblyFile(LazyPath.relative("src/bootloader/arch/x86/64/smp_trampoline.S")),
                                         else => {},
                                     }
 
@@ -405,7 +497,7 @@ pub fn build(b_arg: *Build) !void {
 
                                 executable.code_model = cpu_driver.code_model;
 
-                                executable.setLinkerScriptPath(FileSource.relative(try common.concat(b.allocator, u8, &.{ limine_loader_path ++ "arch/", @tagName(architecture), "/linker_script.ld" })));
+                                executable.setLinkerScriptPath(LazyPath.relative(try concat(b.allocator, u8, &.{ limine_loader_path ++ "arch/", @tagName(architecture), "/linker_script.ld" })));
 
                                 break :blk executable;
                             },
@@ -431,7 +523,7 @@ pub fn build(b_arg: *Build) !void {
                         };
 
                         const execution_types: []const ExecutionType =
-                            switch (common.canVirtualizeWithQEMU(architecture, ci)) {
+                            switch (canVirtualizeWithQEMU(architecture, ci)) {
                             true => &.{ .emulated, .accelerated },
                             false => &.{.emulated},
                         };
@@ -448,13 +540,13 @@ pub fn build(b_arg: *Build) !void {
                                     .executable_kind = executable_kind,
                                 };
 
-                                var disk_argument_parser = common.ArgumentParser.DiskImageBuilder{};
+                                var disk_argument_parser = ArgumentParser.DiskImageBuilder{};
                                 const disk_image_builder_run = b.addRunArtifact(disk_image_builder);
                                 const disk_image_path = disk_image_builder_run.addOutputFileArg("disk.hdd");
 
                                 while (disk_argument_parser.next()) |argument_type| switch (argument_type) {
-                                    .configuration => inline for (common.fields(Configuration)) |field| disk_image_builder_run.addArg(@tagName(@field(configuration, field.name))),
-                                    .image_configuration_path => disk_image_builder_run.addArg(common.ImageConfig.default_path),
+                                    .configuration => inline for (fields(Configuration)) |field| disk_image_builder_run.addArg(@tagName(@field(configuration, field.name))),
+                                    .image_configuration_path => disk_image_builder_run.addArg(ImageConfig.default_path),
                                     .disk_image_path => {
                                         // Must be first
                                         assert(@intFromEnum(argument_type) == 0);
@@ -540,7 +632,7 @@ pub fn build(b_arg: *Build) !void {
 }
 
 const Options = struct {
-    arr: std.EnumArray(BirthProgram, *OptionsStep) = std.EnumArray(BirthProgram, *OptionsStep).initUndefined(),
+    arr: EnumArray(BirthProgram, *OptionsStep) = EnumArray(BirthProgram, *OptionsStep).initUndefined(),
 
     pub fn createOption(options_struct: *Options, birth_program: BirthProgram) void {
         const new_options = b.addOptions();
@@ -591,31 +683,31 @@ fn addFileSize(artifact: *CompileStep, comptime name: []const u8) void {
 
 fn newRunnerRunArtifact(arguments: struct {
     configuration: Configuration,
-    disk_image_path: FileSource,
+    disk_image_path: LazyPath,
     loader: *CompileStep,
     runner: *CompileStep,
     cpu_driver: *CompileStep,
     user_init: *CompileStep,
     qemu_options: QEMUOptions,
-    ovmf_path: FileSource,
+    ovmf_path: LazyPath,
     is_default: bool,
 }) !*RunStep {
     const runner = b.addRunArtifact(arguments.runner);
 
-    var argument_parser = common.ArgumentParser.Runner{};
+    var argument_parser = ArgumentParser.Runner{};
 
     while (argument_parser.next()) |argument_type| switch (argument_type) {
-        .configuration => inline for (common.fields(Configuration)) |field| runner.addArg(@tagName(@field(arguments.configuration, field.name))),
-        .image_configuration_path => runner.addArg(common.ImageConfig.default_path),
+        .configuration => inline for (fields(Configuration)) |field| runner.addArg(@tagName(@field(arguments.configuration, field.name))),
+        .image_configuration_path => runner.addArg(ImageConfig.default_path),
         .cpu_driver => runner.addArtifactArg(arguments.cpu_driver),
         .loader_path => runner.addArtifactArg(arguments.loader),
         .init => runner.addArtifactArg(arguments.user_init),
-        .disk_image_path => runner.addFileSourceArg(arguments.disk_image_path),
-        .qemu_options => inline for (common.fields(QEMUOptions)) |field| runner.addArg(if (@field(arguments.qemu_options, field.name)) "true" else "false"),
+        .disk_image_path => runner.addFileArg(arguments.disk_image_path),
+        .qemu_options => inline for (fields(QEMUOptions)) |field| runner.addArg(if (@field(arguments.qemu_options, field.name)) "true" else "false"),
         .ci => runner.addArg(if (ci) "true" else "false"),
         .debug_user => runner.addArg(if (debug_user) "true" else "false"),
         .debug_loader => runner.addArg(if (debug_loader) "true" else "false"),
-        .ovmf_path => runner.addFileSourceArg(arguments.ovmf_path),
+        .ovmf_path => runner.addFileArg(arguments.ovmf_path),
         .is_default => runner.addArg(if (arguments.is_default) "true" else "false"),
     };
 
@@ -631,15 +723,17 @@ const ExecutableDescriptor = struct {
     modules: []const ModuleID,
 };
 
+const main_package_path = LazyPath.relative(source_root_dir);
 fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
-    const main_file = try std.mem.concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/main.zig" });
+    const main_file = try concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/main.zig" });
     const compile_step = switch (executable_descriptor.kind) {
         .exe => blk: {
             const executable = b.addExecutable(.{
                 .name = executable_descriptor.name,
-                .root_source_file = FileSource.relative(main_file),
+                .root_source_file = LazyPath.relative(main_file),
                 .target = executable_descriptor.target,
                 .optimize = executable_descriptor.optimize_mode,
+                .main_pkg_path = main_package_path,
             });
 
             build_steps.build_all.dependOn(&executable.step);
@@ -647,13 +741,14 @@ fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
             break :blk executable;
         },
         .@"test" => blk: {
-            const test_file = FileSource.relative(try std.mem.concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/test.zig" }));
+            const test_file = LazyPath.relative(try concat(b.allocator, u8, &.{ executable_descriptor.root_project_path, "/test.zig" }));
             const test_exe = b.addTest(.{
                 .name = executable_descriptor.name,
                 .root_source_file = test_file,
                 .target = executable_descriptor.target,
                 .optimize = executable_descriptor.optimize_mode,
                 .test_runner = if (executable_descriptor.target.os_tag) |_| main_file else null,
+                .main_pkg_path = main_package_path,
             });
 
             build_steps.build_all_tests.dependOn(&test_exe.step);
@@ -668,8 +763,6 @@ fn addCompileStep(executable_descriptor: ExecutableDescriptor) !*CompileStep {
     if (executable_descriptor.target.getOs().tag == .freestanding) {
         compile_step.entry_symbol_name = "_start";
     }
-
-    compile_step.setMainPkgPath(source_root_dir);
 
     for (executable_descriptor.modules) |module| {
         modules.addModule(compile_step, module);
@@ -700,8 +793,8 @@ const ModuleID = enum {
 };
 
 pub const Modules = struct {
-    modules: std.EnumArray(ModuleID, *Module) = std.EnumArray(ModuleID, *Module).initUndefined(),
-    dependencies: std.EnumArray(ModuleID, []const ModuleDependency) = std.EnumArray(ModuleID, []const ModuleDependency).initUndefined(),
+    modules: EnumArray(ModuleID, *Module) = EnumArray(ModuleID, *Module).initUndefined(),
+    dependencies: EnumArray(ModuleID, []const ModuleDependency) = EnumArray(ModuleID, []const ModuleDependency).initUndefined(),
 
     fn addModule(mods: Modules, compile_step: *CompileStep, module_id: ModuleID) void {
         compile_step.addModule(@tagName(module_id), mods.modules.get(module_id));
@@ -718,7 +811,7 @@ pub const Modules = struct {
     }
 };
 
-fn getTarget(asked_arch: Cpu.Arch, execution_mode: common.TraditionalExecutionMode) Error!CrossTarget {
+fn getTarget(asked_arch: Cpu.Arch, execution_mode: TraditionalExecutionMode) Error!CrossTarget {
     var enabled_features = Cpu.Feature.Set.empty;
     var disabled_features = Cpu.Feature.Set.empty;
 
@@ -743,14 +836,14 @@ fn getTarget(asked_arch: Cpu.Arch, execution_mode: common.TraditionalExecutionMo
 
     return CrossTarget{
         .cpu_arch = asked_arch,
-        .cpu_model = switch (common.cpu.arch) {
+        .cpu_model = switch (cpu.arch) {
             .x86 => .determined_by_cpu_arch,
             .x86_64 => if (execution_mode == .privileged) .determined_by_cpu_arch else
             // zig fmt off
             .determined_by_cpu_arch,
             // .determined_by_cpu_arch,
             // TODO: this causes some problems: https://github.com/ziglang/zig/issues/15524
-            //.{ .explicit = &common.Target.x86.cpu.x86_64_v3 },
+            //.{ .explicit = &Target.x86.cpu.x86_64_v3 },
             else => .determined_by_cpu_arch,
         },
         .os_tag = .freestanding,

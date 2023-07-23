@@ -22,7 +22,7 @@ const VirtualMemoryRegion = lib.VirtualMemoryRegion;
 const cpu = @import("cpu");
 const Heap = cpu.Heap;
 
-const init = @import("./x86/64/init.zig");
+pub const init = @import("./x86/64/init.zig");
 pub const syscall = @import("./x86/64/syscall.zig");
 pub const entryPoint = init.entryPoint;
 
@@ -56,13 +56,33 @@ pub const Registers = extern struct {
 
 const interrupt_kind: u32 = 0;
 
+const PageFaultFlags = packed struct(u32) {
+    present: bool,
+    write: bool,
+    user: bool,
+    reserved_write: bool,
+    instruction_fetch: bool,
+    protection_key: bool,
+    shadow_stack: bool,
+    reserved0: u8 = 0,
+    software_guard_extensions: bool,
+    reserved: u16 = 0,
+};
+
 export fn interruptHandler(regs: *const InterruptRegisters, interrupt_number: u8) void {
     switch (interrupt_number) {
         local_timer_vector => {
             APIC.write(.eoi, 0);
             nextTimer(10);
         },
-        else => cpu.panicFromInstructionPointerAndFramePointer(regs.rip, regs.rbp, "Exception: 0x{x}", .{interrupt_number}),
+        else => {
+            if (interrupt_number == 0xe) {
+                const pagefault_flags: PageFaultFlags = @bitCast(@as(u32, @intCast(regs.error_code)));
+                const fault_address = privileged.arch.x86_64.registers.cr2.read();
+                log.err("Page 0x{x} not mapped at IP 0x{x}. Flags: {}", .{ fault_address, regs.rip, pagefault_flags });
+            }
+            cpu.panicFromInstructionPointerAndFramePointer(regs.rip, regs.rbp, "Exception 0x{x} at IP 0x{x}", .{ interrupt_number, regs.rip });
+        },
     }
 }
 
@@ -103,7 +123,7 @@ pub const invariant_tsc = false;
 pub const capability_address_space_size = 1 * lib.gb;
 pub const capability_address_space_start = capability_address_space_stack_top - capability_address_space_size;
 pub const capability_address_space_stack_top = 0xffff_ffff_8000_0000;
-pub const capability_address_space_stack_size = privileged.default_stack_size;
+pub const capability_address_space_stack_size = 10 * privileged.default_stack_size;
 pub const capability_address_space_stack_alignment = lib.arch.valid_page_sizes[0];
 pub const capability_address_space_stack_address = VirtualAddress.new(capability_address_space_stack_top - capability_address_space_stack_size);
 pub const code_64 = @offsetOf(GDT, "code_64");
@@ -263,3 +283,5 @@ pub const root_page_table_entry = @as(cpu.arch.PageTableEntry, @enumFromInt(0));
 pub const IOMap = extern struct {
     debug: bool,
 };
+
+pub const user_root_page_table_alignment = 2 * lib.arch.valid_page_sizes[0];

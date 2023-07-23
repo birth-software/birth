@@ -5,8 +5,7 @@ const log = lib.log;
 const privileged = @import("privileged");
 const ACPI = privileged.ACPI;
 const MemoryManager = privileged.MemoryManager;
-const PhysicalHeap = privileged.PhyicalHeap;
-const writer = privileged.writer;
+pub const writer = privileged.writer;
 
 const stopCPU = privileged.arch.stopCPU;
 const GDT = privileged.arch.x86_64.GDT;
@@ -54,10 +53,7 @@ pub const std_options = struct {
         _ = format;
         _ = scope;
         _ = level;
-        // _ = level;
-        // writer.writeByte('[') catch stopCPU();
-        // writer.writeAll(@tagName(scope)) catch stopCPU();
-        // writer.writeAll("] ") catch stopCPU();
+        _ = level;
         // lib.format(writer, format, args) catch stopCPU();
         // writer.writeByte('\n') catch stopCPU();
     }
@@ -83,17 +79,13 @@ const Filesystem = extern struct {
     }
 
     pub fn readFile(filesystem: *Filesystem, file_path: []const u8, file_buffer: []u8) ![]const u8 {
-        log.debug("File {s} read started", .{file_path});
         assert(filesystem.fat_allocator.allocated <= filesystem.fat_allocator.buffer.len);
         const file = try filesystem.fat_cache.readFileToBuffer(file_path, file_buffer);
-        log.debug("File read succeeded", .{});
         return file;
     }
 
     pub fn sneakFile(filesystem: *Filesystem, file_path: []const u8, size: usize) ![]const u8 {
-        log.debug("File {s} read started", .{file_path});
         const file = try filesystem.fat_cache.readFileToCache(file_path, size);
-        log.debug("File read succeeded", .{});
         return file;
     }
 

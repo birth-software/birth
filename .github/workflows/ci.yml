@@ -40,8 +40,10 @@ jobs:
         run: zig env
       - name: Build test executables
         run: zig build all_tests -Dci --verbose
-      - name: Run host tests
-        run: zig build test_host
+      - name: Set up QEMU
+        uses: davidgm94/setup-qemu@main
+      - name: Run all tests
+        run: zig build test_all -Dci --verbose
   # build_and_test:
   #   runs-on: [self-hosted, Linux, X64]
   #   steps:

@@ -7,11 +7,8 @@ const stopCPU = privileged.arch.stopCPU;
 
 const cpu = @import("cpu");
 
-var lock: lib.Spinlock = .released;
-
 pub const std_options = struct {
     pub fn logFn(comptime level: lib.log.Level, comptime scope: @TypeOf(.EnumLiteral), comptime format: []const u8, args: anytype) void {
-        lock.acquire();
         cpu.writer.writeAll("[CPU DRIVER] ") catch unreachable;
         cpu.writer.writeByte('[') catch unreachable;
         cpu.writer.writeAll(@tagName(scope)) catch unreachable;
@@ -21,8 +18,6 @@ pub const std_options = struct {
         cpu.writer.writeAll("] ") catch unreachable;
         lib.format(cpu.writer, format, args) catch unreachable;
         cpu.writer.writeByte('\n') catch unreachable;
-
-        lock.release();
     }
 
     pub const log_level = lib.log.Level.debug;

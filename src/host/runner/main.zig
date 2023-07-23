@@ -251,12 +251,20 @@ pub fn main() anyerror!void {
                 if (arguments.log) |log_configuration| {
                     var log_what = host.ArrayList(u8).init(wrapped_allocator.zigUnwrap());
 
-                    if (log_configuration.guest_errors) try log_what.appendSlice("guest_errors,");
-                    if (log_configuration.interrupts) try log_what.appendSlice("int,");
-                    if (!arguments_result.ci and log_configuration.assembly) try log_what.appendSlice("in_asm,");
+                    if (log_configuration.guest_errors) {
+                        try log_what.appendSlice("guest_errors,");
+                    }
+
+                    if (log_configuration.interrupts) {
+                        try log_what.appendSlice("int,");
+                    }
+
+                    if (!arguments_result.ci and log_configuration.assembly) {
+                        try log_what.appendSlice("in_asm,");
+                    }
 
                     if (log_what.items.len > 0) {
-                        // Delete the last comma
+                        //Delete the last comma
                         _ = log_what.pop();
 
                         try argument_list.append("-d");
@@ -284,7 +292,7 @@ pub fn main() anyerror!void {
                 // GF2, when not found in the PATH, can give problems
                 const use_gf = switch (lib.os) {
                     .macos => false,
-                    .linux => false,
+                    .linux => true,
                     else => false,
                 };
 
@@ -292,7 +300,8 @@ pub fn main() anyerror!void {
                 if (use_gf) {
                     try command_line_gdb.append("gf2");
                 } else {
-                    try command_line_gdb.append("kitty");
+                    const terminal_emulator = "foot";
+                    try command_line_gdb.append(terminal_emulator);
                     try command_line_gdb.append(switch (lib.os) {
                         .linux => "gdb",
                         .macos => "x86_64-elf-gdb",
@@ -331,12 +340,12 @@ pub fn main() anyerror!void {
                 try debugger_process.spawn();
             }
 
-            var process = host.ChildProcess.init(argument_list.items, wrapped_allocator.zigUnwrap());
+            var emulator_process = host.ChildProcess.init(argument_list.items, wrapped_allocator.zigUnwrap());
             //process.stdout_behavior = .I;
-            const result = try process.spawnAndWait();
+            const emulator_process_result = try emulator_process.spawnAndWait();
 
-            if (result == .Exited) {
-                const exit_code = result.Exited;
+            if (emulator_process_result == .Exited) {
+                const exit_code = emulator_process_result.Exited;
                 if (exit_code & 1 != 0) {
                     const mask = lib.maxInt(@TypeOf(exit_code)) - 1;
                     const masked_exit_code = exit_code & mask;
@@ -354,7 +363,7 @@ pub fn main() anyerror!void {
                     } else log.err("QEMU exited with unexpected code: {}. Masked: {}", .{ exit_code, masked_exit_code });
                 } else log.err("QEMU exited with unexpected code: {}", .{exit_code});
             } else {
-                log.err("QEMU was {s}", .{@tagName(result)});
+                log.err("QEMU was {s}", .{@tagName(emulator_process_result)});
             }
 
             if (debugcon_file_used) {

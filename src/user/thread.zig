@@ -9,48 +9,21 @@ const SlotAllocator = user.SlotAllocator;
 const VirtualAddress = lib.VirtualAddress;
 const VirtualAddressSpace = user.VirtualAddressSpace;
 
+const Thread = birth.Thread;
+
 const max_thread_count = 256;
 
-pub const Thread = extern struct {
-    self: *Thread,
-    previous: ?*Thread,
-    next: ?*Thread,
-    stack: [*]u8,
-    stack_top: [*]align(lib.arch.stack_alignment) u8,
-    register_arena: birth.arch.RegisterArena align(lib.arch.stack_alignment),
-    core_id: u32,
-
-    pub fn init(thread: *Thread, scheduler: *user.arch.Scheduler) void {
-        thread.self = thread;
-        thread.previous = null;
-        thread.next = null;
-        thread.core_id = scheduler.generic.core_id;
-    }
-};
-
-pub const Mutex = extern struct {
-    locked: bool = false,
-
-    pub inline fn internalLock(mutex: *volatile Mutex) void {
-        mutex.locked = true;
-    }
-};
-
-var static_stack: [0x10000]u8 align(lib.arch.stack_alignment) = undefined;
-var static_thread: Thread = undefined;
-var static_thread_lock = Mutex{};
-
-pub fn initDisabled(scheduler: *user.arch.Scheduler) noreturn {
-    const thread = &static_thread;
-    static_thread_lock.internalLock();
-    thread.stack = &static_stack;
-    thread.stack_top = static_stack[static_stack.len..];
+pub fn initBootstrap(scheduler: *user.arch.Scheduler) noreturn {
+    const thread = &scheduler.generic.bootstrap_thread;
+    thread.stack = &scheduler.common.generic.setup_stack;
+    thread.stack_top = @ptrFromInt(@intFromPtr(&scheduler.common.generic.setup_stack) + scheduler.common.generic.setup_stack.len);
     thread.init(scheduler);
 
     // TODO: use RAX as parameter?
 
     user.arch.setInitialState(&thread.register_arena, VirtualAddress.new(bootstrapThread), VirtualAddress.new(thread.stack_top), .{0} ** 6);
-
+    scheduler.generic.enqueueThread(thread);
+    scheduler.generic.current_thread = thread;
     scheduler.common.generic.has_work = true;
 
     scheduler.restore(&thread.register_arena);

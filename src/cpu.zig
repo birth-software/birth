@@ -13,64 +13,44 @@ const PhysicalAddress = lib.PhysicalAddress;
 const PhysicalAddressSpace = lib.PhysicalAddressSpace;
 const PhysicalMemoryRegion = lib.PhysicalMemoryRegion;
 const stopCPU = privileged.arch.stopCPU;
-const VirtualAddress = privileged.VirtualAddress;
-const VirtualMemoryRegion = privileged.VirtualMemoryRegion;
+const VirtualAddress = lib.VirtualAddress;
+const VirtualMemoryRegion = lib.VirtualMemoryRegion;
+const paging = privileged.arch.paging;
 
 const birth = @import("birth");
 
-pub const test_runner = @import("cpu/test_runner.zig");
 pub const arch = @import("cpu/arch.zig");
-pub const capabilities = @import("cpu/capabilities.zig");
+pub const interface = @import("cpu/interface.zig");
+pub const init = @import("cpu/init.zig");
+
+const PageTableRegions = arch.init.PageTableRegions;
 
 pub export var stack: [0x8000]u8 align(0x1000) = undefined;
-pub export var page_allocator = PageAllocator{
-    .head = null,
-    .list_allocator = .{
-        .u = .{
-            .primitive = .{
-                .backing_4k_page = undefined,
-                .allocated = 0,
-            },
-        },
-        .primitive = true,
-    },
-};
 
 pub var bundle: []const u8 = &.{};
 pub var bundle_files: []const u8 = &.{};
 
+pub export var page_allocator = PageAllocator{};
 pub export var user_scheduler: *UserScheduler = undefined;
-pub export var driver: *align(lib.arch.valid_page_sizes[0]) Driver = undefined;
+pub export var heap = HeapImplementation(false){};
+pub var debug_info: lib.ModuleDebugInfo = undefined;
 pub export var page_tables: CPUPageTables = undefined;
 pub var file: []align(lib.default_sector_size) const u8 = undefined;
 pub export var core_id: u32 = 0;
 pub export var bsp = false;
 var panic_lock = lib.Spinlock.released;
 
-/// This data structure holds the information needed to run a core
-pub const Driver = extern struct {
-    init_root_capability: capabilities.RootDescriptor,
-    valid: bool,
-    padding: [padding_byte_count]u8 = .{0} ** padding_byte_count,
-    const padding_byte_count = lib.arch.valid_page_sizes[0] - @sizeOf(bool) - @sizeOf(capabilities.RootDescriptor);
-
-    pub inline fn getRootCapability(drv: *Driver) *capabilities.Root {
-        return drv.init_root_capability.value;
-    }
-
-    comptime {
-        // @compileLog(@sizeOf(Driver));
-        assert(lib.isAligned(@sizeOf(Driver), lib.arch.valid_page_sizes[0]));
-    }
-};
-
 /// This data structure holds the information needed to run a program in a core (cpu side)
 pub const UserScheduler = extern struct {
-    capability_root_node: capabilities.Root,
-    common: *birth.UserScheduler,
+    s: S,
     padding: [padding_byte_count]u8 = .{0} ** padding_byte_count,
 
-    const total_size = @sizeOf(capabilities.Root) + @sizeOf(*birth.UserScheduler);
+    const S = extern struct {
+        capability_root_node: interface.Root,
+        common: *birth.Scheduler.Common,
+    };
+
+    const total_size = @sizeOf(S);
     const aligned_size = lib.alignForward(usize, total_size, lib.arch.valid_page_sizes[0]);
     const padding_byte_count = aligned_size - total_size;
 
@@ -81,7 +61,7 @@ pub const UserScheduler = extern struct {
     }
 };
 
-const print_stack_trace = false;
+const print_stack_trace = true;
 var panic_count: usize = 0;
 
 inline fn panicPrologue(comptime format: []const u8, arguments: anytype) !void {
@@ -92,9 +72,9 @@ inline fn panicPrologue(comptime format: []const u8, arguments: anytype) !void {
     try writer.writeAll(lib.Color.get(.bold));
     try writer.writeAll(lib.Color.get(.red));
     try writer.writeAll("[CPU DRIVER] [PANIC] ");
-    try writer.writeAll(lib.Color.get(.reset));
     try writer.print(format, arguments);
     try writer.writeByte('\n');
+    try writer.writeAll(lib.Color.get(.reset));
 }
 
 inline fn panicEpilogue() noreturn {
@@ -103,64 +83,68 @@ inline fn panicEpilogue() noreturn {
     shutdown(.failure);
 }
 
-// inline fn printStackTrace(maybe_stack_trace: ?*lib.StackTrace) !void {
-//     if (maybe_stack_trace) |stack_trace| {
-//         var debug_info = try getDebugInformation();
-//         try writer.writeAll("Stack trace:\n");
-//         var frame_index: usize = 0;
-//         var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
-//
-//         while (frames_left != 0) : ({
-//             frames_left -= 1;
-//             frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
-//         }) {
-//             const return_address = stack_trace.instruction_addresses[frame_index];
-//             try writer.print("[{}] ", .{frame_index});
-//             try printSourceAtAddress(&debug_info, return_address);
-//         }
-//     } else {
-//         try writer.writeAll("Stack trace not available\n");
-//     }
-// }
+inline fn printStackTrace(maybe_stack_trace: ?*lib.StackTrace) !void {
+    if (maybe_stack_trace) |stack_trace| {
+        try writer.writeAll("Stack trace:\n");
+        var frame_index: usize = 0;
+        var frames_left: usize = @min(stack_trace.index, stack_trace.instruction_addresses.len);
 
-// inline fn printStackTraceFromStackIterator(return_address: usize, frame_address: usize) !void {
-//     var debug_info = try getDebugInformation();
-//     var stack_iterator = lib.StackIterator.init(return_address, frame_address);
-//     var frame_index: usize = 0;
-//     try writer.writeAll("Stack trace:\n");
-//
-//     try printSourceAtAddress(&debug_info, return_address);
-//     while (stack_iterator.next()) |address| : (frame_index += 1) {
-//         try writer.print("[{}] ", .{frame_index});
-//         try printSourceAtAddress(&debug_info, address);
-//     }
-// }
+        while (frames_left != 0) : ({
+            frames_left -= 1;
+            frame_index = (frame_index + 1) % stack_trace.instruction_addresses.len;
+        }) {
+            const return_address = stack_trace.instruction_addresses[frame_index];
+            try writer.print("[{}] ", .{frame_index});
+            try printSourceAtAddress(return_address);
+            try writer.writeByte('\n');
+        }
+    } else {
+        try writer.writeAll("Stack trace not available\n");
+    }
+}
 
-// fn printSourceAtAddress(debug_info: *lib.ModuleDebugInfo, address: usize) !void {
-//     if (debug_info.findCompileUnit(address)) |compile_unit| {
-//         const symbol = .{
-//             .symbol_name = debug_info.getSymbolName(address) orelse "???",
-//             .compile_unit_name = compile_unit.die.getAttrString(debug_info, lib.dwarf.AT.name, debug_info.debug_str, compile_unit.*) catch "???",
-//             .line_info = debug_info.getLineNumberInfo(heap_allocator.toZig(), compile_unit.*, address) catch null,
-//         };
-//         try writer.print("0x{x}: {s}!{s} {s}:{}:{}\n", .{ address, symbol.symbol_name, symbol.compile_unit_name, symbol.line_info.?.file_name, symbol.line_info.?.line, symbol.line_info.?.column });
-//     } else |err| {
-//         return err;
-//     }
-// }
+inline fn printStackTraceFromStackIterator(return_address: usize, frame_address: usize) !void {
+    var stack_iterator = lib.StackIterator.init(return_address, frame_address);
+    var frame_index: usize = 0;
+    try writer.writeAll("Stack trace:\n");
+
+    while (stack_iterator.next()) |address| : (frame_index += 1) {
+        if (address == 0) break;
+        try writer.print("[{}] ", .{frame_index});
+        try printSourceAtAddress(address);
+        try writer.writeByte('\n');
+    }
+}
+
+fn printSourceAtAddress(address: usize) !void {
+    const compile_unit = debug_info.findCompileUnit(address) catch {
+        try writer.print("0x{x}: ???", .{address});
+        return;
+    };
+    const symbol_name = debug_info.getSymbolName(address) orelse "???";
+    const compile_unit_name = compile_unit.die.getAttrString(&debug_info, lib.dwarf.AT.name, debug_info.section(.debug_str), compile_unit.*) catch "???";
+    const line_info = debug_info.getLineNumberInfo(heap.allocator.zigUnwrap(), compile_unit.*, address) catch null;
+    const symbol = .{
+        .symbol_name = symbol_name,
+        .compile_unit_name = compile_unit_name,
+        .line_info = line_info,
+    };
+
+    const file_name = if (symbol.line_info) |li| li.file_name else "???";
+    const line = if (symbol.line_info) |li| li.line else 0;
+    const column = if (symbol.line_info) |li| li.column else 0;
+    try writer.print("0x{x}: {s}!{s} {s}:{}:{}", .{ address, symbol.symbol_name, symbol.compile_unit_name, file_name, line, column });
+}
 
 pub fn panicWithStackTrace(stack_trace: ?*lib.StackTrace, comptime format: []const u8, arguments: anytype) noreturn {
-    _ = stack_trace;
     panicPrologue(format, arguments) catch {};
-    // if (print_stack_trace) printStackTrace(stack_trace) catch {};
+    if (print_stack_trace) printStackTrace(stack_trace) catch {};
     panicEpilogue();
 }
 
 pub fn panicFromInstructionPointerAndFramePointer(return_address: usize, frame_address: usize, comptime format: []const u8, arguments: anytype) noreturn {
-    _ = frame_address;
-    _ = return_address;
     panicPrologue(format, arguments) catch {};
-    //if (print_stack_trace) printStackTraceFromStackIterator(return_address, frame_address) catch {};
+    if (print_stack_trace) printStackTraceFromStackIterator(return_address, frame_address) catch {};
     panicEpilogue();
 }
 
@@ -168,268 +152,465 @@ pub fn panic(comptime format: []const u8, arguments: anytype) noreturn {
     @call(.always_inline, panicFromInstructionPointerAndFramePointer, .{ @returnAddress(), @frameAddress(), format, arguments });
 }
 
-pub var syscall_count: usize = 0;
+pub var command_count: usize = 0;
 
 pub inline fn shutdown(exit_code: lib.QEMU.ExitCode) noreturn {
     log.debug("Printing stats...", .{});
-    log.debug("Syscall count: {}", .{syscall_count});
+    log.debug("System call count: {}", .{interface.system_call_count});
 
     privileged.shutdown(exit_code);
 }
 
-pub const PageAllocator = extern struct {
-    head: ?*Entry,
-    list_allocator: ListAllocator,
-    total_allocated_size: u32 = 0,
+pub const RegionList = extern struct {
+    regions: [list_region_count]PhysicalMemoryRegion = .{PhysicalMemoryRegion.invalid()} ** list_region_count,
+    metadata: Metadata = .{},
 
-    fn getPageAllocatorInterface(pa: *PageAllocator) PageAllocatorInterface {
+    pub const Metadata = extern struct {
+        reserved: usize = 0,
+        bitset: lib.BitsetU64(list_region_count) = .{},
+        previous: ?*RegionList = null,
+        next: ?*RegionList = null,
+
+        comptime {
+            assert(@sizeOf(Metadata) == expected_size);
+            assert(@bitSizeOf(usize) - list_region_count < 8);
+        }
+
+        const expected_size = 4 * @sizeOf(usize);
+    };
+
+    const Error = error{
+        OutOfMemory,
+        no_space,
+        misalignment_page_size,
+    };
+
+    pub fn allocateAligned(list: *RegionList, size: usize, alignment: usize) Error!PhysicalMemoryRegion {
+        assert(alignment % lib.arch.valid_page_sizes[0] == 0);
+
+        for (&list.regions, 0..) |*region, _index| {
+            const index: u6 = @intCast(_index);
+            assert(lib.isAligned(region.size, lib.arch.valid_page_sizes[0]));
+            assert(lib.isAligned(region.address.value(), lib.arch.valid_page_sizes[0]));
+
+            if (list.metadata.bitset.isSet(index)) {
+                if (lib.isAligned(region.address.value(), alignment)) {
+                    if (region.size >= size) {
+                        const result = region.takeSlice(size) catch unreachable;
+                        if (region.size == 0) {
+                            list.remove(@intCast(index));
+                        }
+
+                        return result;
+                    }
+                }
+            }
+        }
+
+        return Error.OutOfMemory;
+    }
+
+    pub fn remove(list: *RegionList, index: u6) void {
+        list.metadata.bitset.clear(index);
+    }
+
+    pub const UnalignedAllocationResult = extern struct {
+        wasted: PhysicalMemoryRegion,
+        allocated: PhysicalMemoryRegion,
+    };
+
+    /// Slow path
+    pub fn allocateAlignedSplitting(list: *RegionList, size: usize, alignment: usize) !UnalignedAllocationResult {
+        for (&list.regions, 0..) |*region, _index| {
+            const index: u6 = @intCast(_index);
+            const aligned_region_address = lib.alignForward(usize, region.address.value(), alignment);
+            const wasted_space = aligned_region_address - region.address.value();
+
+            if (list.metadata.bitset.isSet(index)) {
+                const target_size = wasted_space + size;
+                if (region.size >= target_size) {
+                    const wasted_region = try region.takeSlice(wasted_space);
+                    const allocated_region = try region.takeSlice(size);
+
+                    if (region.size == 0) {
+                        list.remove(index);
+                    }
+
+                    return UnalignedAllocationResult{
+                        .wasted = wasted_region,
+                        .allocated = allocated_region,
+                    };
+                }
+            }
+        }
+
+        log.err("allocateAlignedSplitting", .{});
+        return error.OutOfMemory;
+    }
+
+    pub fn allocate(list: *RegionList, size: usize) Error!PhysicalMemoryRegion {
+        return list.allocateAligned(size, lib.arch.valid_page_sizes[0]);
+    }
+
+    pub fn append(list: *RegionList, region: PhysicalMemoryRegion) Error!birth.interface.Memory {
+        var block_count: usize = 0;
+        while (true) : (block_count += 1) {
+            if (!list.metadata.bitset.isFull()) {
+                const region_index = list.metadata.bitset.allocate() catch continue;
+                const block_index = block_count;
+
+                list.regions[region_index] = region;
+
+                return .{
+                    .block = @intCast(block_index),
+                    .region = region_index,
+                };
+            } else {
+                return Error.no_space;
+            }
+        }
+    }
+
+    const cache_line_count = 16;
+    const list_region_count = @divExact((cache_line_count * lib.cache_line_size) - Metadata.expected_size, @sizeOf(PhysicalMemoryRegion));
+
+    comptime {
+        assert(@sizeOf(RegionList) % lib.cache_line_size == 0);
+    }
+};
+
+const UseCase = extern struct {
+    reason: Reason,
+    const Reason = enum(u8) {
+        heap,
+        privileged,
+        wasted,
+        user_protected,
+        user,
+        bootloader,
+    };
+};
+
+// TODO: make this more cache friendly
+const UsedRegionList = extern struct {
+    region: PhysicalMemoryRegion,
+    use_case: UseCase,
+    next: ?*UsedRegionList = null,
+};
+
+pub const PageAllocator = extern struct {
+    free_regions: ?*RegionList = null,
+    used_regions: ?*UsedRegionList = null,
+    used_region_buffer: ?*UsedRegionList = null,
+    free_byte_count: u64 = 0,
+    used_byte_count: u64 = 0,
+
+    pub fn allocate(allocator: *PageAllocator, size: usize, use_case: UseCase) lib.Allocator.Allocate.Error!PhysicalMemoryRegion {
+        const allocation = try allocator.allocateRaw(size);
+        try allocator.appendUsedRegion(allocation, use_case);
+        return allocation;
+    }
+
+    fn allocateRaw(allocator: *PageAllocator, size: usize) !PhysicalMemoryRegion {
+        var iterator = allocator.free_regions;
+        while (iterator) |region_list| : (iterator = region_list.metadata.next) {
+            const allocation = region_list.allocate(size) catch continue;
+            allocator.free_byte_count -= size;
+            allocator.used_byte_count += size;
+
+            return allocation;
+        }
+
+        log.err("allocateRaw: out of memory. Used: 0x{x}. Free: 0x{x}", .{ allocator.used_byte_count, allocator.free_byte_count });
+        return error.OutOfMemory;
+    }
+
+    /// The only purpose this serves is to do the trick when switching cr3
+    pub fn allocateAligned(allocator: *PageAllocator, size: usize, alignment: usize, use_case: UseCase) lib.Allocator.Allocate.Error!PhysicalMemoryRegion {
+        var iterator = allocator.free_regions;
+        while (iterator) |region_list| : (iterator = region_list.metadata.next) {
+            const unaligned_allocation = region_list.allocateAlignedSplitting(size, alignment) catch continue;
+            // TODO: do something with the wasted space
+            const total_allocation_size = unaligned_allocation.wasted.size + unaligned_allocation.allocated.size;
+            log.err("ALLOCATED: 0x{x}. WASTED: 0x{x}. TOTAL: 0x{x}", .{ unaligned_allocation.allocated.size, unaligned_allocation.wasted.size, total_allocation_size });
+
+            try allocator.appendUsedRegion(unaligned_allocation.allocated, use_case);
+            try allocator.appendUsedRegion(unaligned_allocation.wasted, .{ .reason = .wasted });
+
+            allocator.free_byte_count -= total_allocation_size;
+            allocator.used_byte_count += total_allocation_size;
+
+            return unaligned_allocation.allocated;
+        }
+
+        @panic("TODO: PageAllocator.allocateAligned");
+    }
+
+    pub fn appendUsedRegion(allocator: *PageAllocator, physical_region: PhysicalMemoryRegion, use_case: UseCase) lib.Allocator.Allocate.Error!void {
+        const need_allocation = blk: {
+            var result: bool = true;
+            var iterator = allocator.used_region_buffer;
+            while (iterator) |it| : (iterator = it.next) {
+                result = it.region.size < @sizeOf(UsedRegionList);
+                if (!result) {
+                    break;
+                }
+            }
+
+            break :blk result;
+        };
+
+        if (need_allocation) {
+            const allocation = try allocator.allocateRaw(lib.arch.valid_page_sizes[0]);
+            const new_buffer = allocation.address.toHigherHalfVirtualAddress().access(*UsedRegionList);
+            new_buffer.* = .{
+                .region = allocation,
+                .use_case = undefined,
+            };
+            _ = new_buffer.region.takeSlice(@sizeOf(UsedRegionList)) catch unreachable;
+            const used_region_allocation = new_buffer.region.takeSlice(@sizeOf(UsedRegionList)) catch unreachable;
+            const new_used_region = used_region_allocation.address.toHigherHalfVirtualAddress().access(*UsedRegionList);
+            new_used_region.* = .{
+                .region = allocation,
+                .use_case = .{ .reason = .privileged },
+            };
+
+            if (allocator.used_regions) |_| {
+                var iterator = allocator.used_regions;
+                _ = iterator;
+                @panic("TODO: iterate");
+            } else {
+                allocator.used_regions = new_used_region;
+            }
+
+            if (allocator.used_region_buffer) |_| {
+                var iterator = allocator.used_region_buffer;
+                _ = iterator;
+                @panic("TODO: iterate 2");
+            } else {
+                allocator.used_region_buffer = new_buffer;
+            }
+
+            assert(new_buffer.region.size < allocation.size);
+        }
+
+        var iterator = allocator.used_region_buffer;
+        while (iterator) |it| : (iterator = it.next) {
+            if (it.region.size >= @sizeOf(UsedRegionList)) {
+                const new_used_region_allocation = it.region.takeSlice(@sizeOf(UsedRegionList)) catch unreachable;
+                const new_used_region = new_used_region_allocation.address.toHigherHalfVirtualAddress().access(*UsedRegionList);
+                new_used_region.* = .{
+                    .region = physical_region,
+                    .use_case = use_case,
+                };
+
+                iterator = allocator.used_regions;
+
+                while (iterator) |i| : (iterator = i.next) {
+                    if (i.next == null) {
+                        i.next = new_used_region;
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (true) @panic("TODO: PageAllocator.appendUsedRegion");
+        return error.OutOfMemory;
+    }
+
+    pub fn getPageTableAllocatorInterface(allocator: *PageAllocator) privileged.PageAllocator {
         return .{
-            .allocate = callbackAllocate,
-            .context = pa,
+            .allocate = pageTableAllocateCallback,
+            .context = allocator,
             .context_type = .cpu,
         };
     }
 
-    fn callbackAllocate(context: ?*anyopaque, size: u64, alignment: u64, options: PageAllocatorInterface.AllocateOptions) Allocator.Allocate.Error!PhysicalMemoryRegion {
-        _ = options;
-        const pa = @as(?*PageAllocator, @ptrCast(@alignCast(context))) orelse return Allocator.Allocate.Error.OutOfMemory;
-        const result = try pa.allocate(size, alignment);
-        return result;
+    fn pageTableAllocateCallback(context: ?*anyopaque, size: u64, alignment: u64, options: privileged.PageAllocator.AllocateOptions) error{OutOfMemory}!lib.PhysicalMemoryRegion {
+        const allocator: *PageAllocator = @alignCast(@ptrCast(context orelse return error.OutOfMemory));
+        assert(alignment == lib.arch.valid_page_sizes[0]);
+        assert(size == lib.arch.valid_page_sizes[0]);
+        assert(options.count == 1);
+        assert(options.level_valid);
+
+        const page_table_allocation = try allocator.allocate(size, .{ .reason = .user_protected });
+        // log.debug("Page table allocation: 0x{x}", .{page_table_allocation.address.value()});
+
+        // TODO: is this right?
+        if (options.user) {
+            const user_page_tables = &user_scheduler.s.capability_root_node.dynamic.page_table;
+            const user_allocator = &user_scheduler.s.capability_root_node.heap.allocator;
+            const new_page_table_ref = try user_page_tables.appendPageTable(user_allocator, .{
+                .region = page_table_allocation,
+                .mapping = page_table_allocation.address.toHigherHalfVirtualAddress(),
+                .flags = .{ .level = options.level },
+            });
+
+            const indexed = options.virtual_address;
+            const indices = indexed.toIndices();
+
+            var page_table_ref = user_page_tables.user;
+            log.debug("Level: {s}", .{@tagName(options.level)});
+
+            for (0..@intFromEnum(options.level) - 1) |level_index| {
+                log.debug("Fetching {s} page table", .{@tagName(@as(paging.Level, @enumFromInt(level_index)))});
+                const page_table = user_page_tables.getPageTable(page_table_ref) catch @panic("WTF");
+                page_table_ref = page_table.children[indices[level_index]];
+            }
+
+            const parent_page_table = user_page_tables.getPageTable(page_table_ref) catch @panic("WTF");
+            parent_page_table.children[indices[@intFromEnum(options.level) - 1]] = new_page_table_ref;
+        }
+
+        return page_table_allocation;
     }
-
-    pub fn allocate(pa: *PageAllocator, size: u64, alignment: u64) Allocator.Allocate.Error!PhysicalMemoryRegion {
-        if (pa.head == null) {
-            @panic("head null");
-        }
-
-        const allocation = blk: {
-            var ptr = pa.head;
-            while (ptr) |entry| : (ptr = entry.next) {
-                if (lib.isAligned(entry.region.address.value(), alignment) and entry.region.size > size) {
-                    const result = PhysicalMemoryRegion{
-                        .address = entry.region.address,
-                        .size = size,
-                    };
-                    entry.region.address = entry.region.address.offset(size);
-                    entry.region.size -= size;
-
-                    pa.total_allocated_size += @as(u32, @intCast(size));
-                    // log.debug("Allocated 0x{x}", .{size});
-
-                    break :blk result;
-                }
-            }
-
-            ptr = pa.head;
-
-            while (ptr) |entry| : (ptr = entry.next) {
-                const aligned_address = lib.alignForward(entry.region.address.value(), alignment);
-                const top = entry.region.top().value();
-                if (aligned_address < top and top - aligned_address > size) {
-                    // log.debug("Found region which we should be splitting: (0x{x}, 0x{x})", .{ entry.region.address.value(), entry.region.size });
-                    // log.debug("User asked for 0x{x} bytes with alignment 0x{x}", .{ size, alignment });
-                    // Split the addresses to obtain the desired result
-                    const first_region_size = aligned_address - entry.region.address.value();
-                    const first_region_address = entry.region.address;
-                    const first_region_next = entry.next;
-
-                    const second_region_address = aligned_address + size;
-                    const second_region_size = top - aligned_address + size;
-
-                    const result = PhysicalMemoryRegion{
-                        .address = PhysicalAddress.new(aligned_address),
-                        .size = size,
-                    };
-
-                    // log.debug("\nFirst region: (Address: 0x{x}. Size: 0x{x}).\nRegion in the middle (allocated): (Address: 0x{x}. Size: 0x{x}).\nSecond region: (Address: 0x{x}. Size: 0x{x})", .{ first_region_address, first_region_size, result.address.value(), result.size, second_region_address, second_region_size });
-
-                    const new_entry = pa.list_allocator.get();
-                    entry.* = .{
-                        .region = .{
-                            .address = first_region_address,
-                            .size = first_region_size,
-                        },
-                        .next = new_entry,
-                    };
-
-                    new_entry.* = .{
-                        .region = .{
-                            .address = PhysicalAddress.new(second_region_address),
-                            .size = second_region_size,
-                        },
-                        .next = first_region_next,
-                    };
-                    // log.debug("First entry: (Address: 0x{x}. Size: 0x{x})", .{ entry.region.address.value(), entry.region.size });
-                    // log.debug("Second entry: (Address: 0x{x}. Size: 0x{x})", .{ new_entry.region.address.value(), new_entry.region.size });
-
-                    // pa.total_allocated_size += @intCast(u32, size);
-                    // log.debug("Allocated 0x{x}", .{size});
-
-                    break :blk result;
-                }
-            }
-
-            log.err("Allocate error. Size: 0x{x}. Alignment: 0x{x}. Total allocated size: 0x{x}", .{ size, alignment, pa.total_allocated_size });
-            return Allocator.Allocate.Error.OutOfMemory;
-        };
-
-        //log.debug("Physical allocation: 0x{x}, 0x{x}", .{ allocation.address.value(), allocation.size });
-
-        @memset(allocation.toHigherHalfVirtualAddress().access(u8), 0);
-
-        return allocation;
-    }
-
-    pub inline fn fromBSP(bootloader_information: *bootloader.Information) InitializationError!PageAllocator {
-        const memory_map_entries = bootloader_information.getMemoryMapEntries();
-        const page_counters = bootloader_information.getPageCounters();
-
-        var total_size: usize = 0;
-        const page_shifter = lib.arch.page_shifter(lib.arch.valid_page_sizes[0]);
-
-        for (memory_map_entries, page_counters) |entry, page_counter| {
-            if (entry.type != .usable or !lib.isAligned(entry.region.size, lib.arch.valid_page_sizes[0]) or entry.region.address.value() < lib.mb) {
-                continue;
-            }
-
-            total_size += entry.region.size - (page_counter << page_shifter);
-        }
-
-        const cpu_count = bootloader_information.smp.cpu_count;
-        const total_memory_to_take = total_size / cpu_count;
-
-        // Look for a 4K page to host the memory map
-        const backing_4k_page = for (memory_map_entries, page_counters) |entry, *page_counter| {
-            const occupied_size = page_counter.* << page_shifter;
-            const entry_size_left = entry.region.size - occupied_size;
-            if (entry_size_left != 0) {
-                if (entry.type != .usable or !lib.isAligned(entry.region.size, lib.arch.valid_page_sizes[0]) or entry.region.address.value() < lib.mb) continue;
-
-                assert(lib.isAligned(entry_size_left, lib.arch.valid_page_sizes[0]));
-                page_counter.* += 1;
-                break entry.region.address.offset(occupied_size);
-            }
-        } else return InitializationError.bootstrap_region_not_found;
-
-        var memory_taken: usize = 0;
-        var backing_4k_page_memory_allocated: usize = 0;
-
-        var last_entry: ?*Entry = null;
-        var first_entry: ?*Entry = null;
-
-        for (memory_map_entries, page_counters) |entry, *page_counter| {
-            if (entry.type != .usable or !lib.isAligned(entry.region.size, lib.arch.valid_page_sizes[0]) or entry.region.address.value() < lib.mb) continue;
-
-            const occupied_size = page_counter.* << page_shifter;
-
-            if (occupied_size < entry.region.size) {
-                const entry_size_left = entry.region.size - occupied_size;
-
-                var memory_taken_from_region: usize = 0;
-                while (memory_taken + memory_taken_from_region < total_memory_to_take) {
-                    if (memory_taken_from_region == entry_size_left) break;
-
-                    const size_to_take = @min(2 * lib.mb, entry_size_left);
-                    memory_taken_from_region += size_to_take;
-                }
-
-                memory_taken += memory_taken_from_region;
-
-                page_counter.* += @as(u32, @intCast(memory_taken_from_region >> page_shifter));
-                const region_descriptor = .{
-                    .address = entry.region.offset(occupied_size).address,
-                    .size = memory_taken_from_region,
-                };
-
-                if (backing_4k_page_memory_allocated >= lib.arch.valid_page_sizes[0]) return InitializationError.memory_exceeded;
-                const entry_address = backing_4k_page.offset(backing_4k_page_memory_allocated);
-                const new_entry = entry_address.toHigherHalfVirtualAddress().access(*Entry);
-                backing_4k_page_memory_allocated += @sizeOf(Entry);
-
-                new_entry.* = .{
-                    .region = .{
-                        .address = region_descriptor.address,
-                        .size = region_descriptor.size,
-                    },
-                    .next = null,
-                };
-
-                if (last_entry) |e| {
-                    e.next = new_entry;
-                } else {
-                    first_entry = new_entry;
-                }
-
-                last_entry = new_entry;
-
-                if (memory_taken >= total_memory_to_take) break;
-            }
-        }
-
-        const result = .{
-            .head = first_entry,
-            .list_allocator = .{
-                .u = .{
-                    .primitive = .{
-                        .backing_4k_page = backing_4k_page,
-                        .allocated = backing_4k_page_memory_allocated,
-                    },
-                },
-                .primitive = true,
-            },
-        };
-
-        return result;
-    }
-
-    const ListAllocator = extern struct {
-        u: extern union {
-            primitive: extern struct {
-                backing_4k_page: PhysicalAddress,
-                allocated: u64,
-            },
-            normal: extern struct {
-                foo: u64,
-            },
-        },
-        primitive: bool,
-
-        pub fn get(list_allocator: *ListAllocator) *Entry {
-            switch (list_allocator.primitive) {
-                true => {
-                    if (list_allocator.u.primitive.allocated < 0x1000) {
-                        const result = list_allocator.u.primitive.backing_4k_page.offset(list_allocator.u.primitive.allocated).toHigherHalfVirtualAddress().access(*Entry);
-                        list_allocator.u.primitive.backing_4k_page = list_allocator.u.primitive.backing_4k_page.offset(@sizeOf(Entry));
-                        return result;
-                    } else {
-                        @panic("reached limit");
-                    }
-                },
-                false => {
-                    @panic("not primitive allocator not implemented");
-                },
-            }
-        }
-    };
-
-    pub const Entry = extern struct {
-        region: PhysicalMemoryRegion,
-        next: ?*Entry,
-    };
-
-    const InitializationError = error{
-        bootstrap_region_not_found,
-        memory_exceeded,
-    };
 };
 
-// fn getDebugInformation() !lib.ModuleDebugInfo {
-//     const debug_info = lib.getDebugInformation(heap_allocator.toZig(), file) catch |err| {
-//         try writer.print("Failed to get debug information: {}", .{err});
-//         return err;
-//     };
-//
-//     return debug_info;
-// }
+pub const HeapRegion = extern struct {
+    region: VirtualMemoryRegion,
+    previous: ?*HeapRegion = null,
+    next: ?*HeapRegion = null,
+};
+
+pub fn HeapImplementation(comptime user: bool) type {
+    const use_case = .{ .reason = if (user) .user_protected else .heap };
+    _ = use_case;
+    return extern struct {
+        allocator: lib.Allocator = .{
+            .callbacks = .{
+                .allocate = callbackAllocate,
+            },
+        },
+        regions: ?*Region = null,
+
+        const Heap = @This();
+        const Region = HeapRegion;
+
+        pub fn create(heap_allocator: *Heap, comptime T: type) lib.Allocator.Allocate.Error!*T {
+            const result = try heap_allocator.allocate(@sizeOf(T), @alignOf(T));
+            return @ptrFromInt(result.address);
+        }
+
+        pub fn addBootstrapingRegion(heap_allocator: *Heap, region: VirtualMemoryRegion) !void {
+            assert(heap_allocator.regions == null);
+
+            var region_splitter = region;
+            const new_region_vmr = try region_splitter.takeSlice(@sizeOf(Region));
+            const new_region = new_region_vmr.address.access(*Region);
+            new_region.* = Region{
+                .region = region_splitter,
+            };
+
+            heap_allocator.regions = new_region;
+        }
+
+        // TODO: turn the other way around: make the callback call this function
+        pub fn allocate(heap_allocator: *Heap, size: u64, alignment: u64) lib.Allocator.Allocate.Error!lib.Allocator.Allocate.Result {
+            var iterator = heap_allocator.regions;
+            while (iterator) |region| : (iterator = region.next) {
+                if (region.region.address.isAligned(alignment)) {
+                    if (region.region.size >= size) {
+                        const virtual_region = region.region.takeSlice(size) catch unreachable;
+                        const should_remove = region.region.size == 0;
+                        if (should_remove) {
+                            // TODO: actually remove and reuse
+                            if (region.previous) |prev| prev.next = region.next;
+                        }
+
+                        return @bitCast(virtual_region);
+                    }
+                }
+            }
+
+            const new_size = lib.alignForward(usize, size + @sizeOf(HeapRegion), lib.arch.valid_page_sizes[0]);
+            assert(alignment <= lib.arch.valid_page_sizes[0]);
+            var new_physical_region = try page_allocator.allocate(new_size, .{ .reason = .heap });
+            const new_alloc = new_physical_region.takeSlice(@sizeOf(HeapRegion)) catch unreachable;
+            const new_heap_region = new_alloc.toHigherHalfVirtualAddress().address.access(*HeapRegion);
+            new_heap_region.* = .{
+                .region = new_physical_region.toHigherHalfVirtualAddress(),
+            };
+
+            iterator = heap.regions;
+            if (iterator) |_| {
+                while (iterator) |heap_region| : (iterator = heap_region.next) {
+                    if (heap_region.next == null) {
+                        heap_region.next = new_heap_region;
+                        break;
+                    }
+                }
+            } else {
+                @panic("NO");
+            }
+
+            return heap.allocate(size, alignment);
+        }
+
+        fn callbackAllocate(allocator: *Allocator, size: u64, alignment: u64) lib.Allocator.Allocate.Error!lib.Allocator.Allocate.Result {
+            // This assert is triggered by the Zig std library
+            //assert(lib.isAligned(size, alignment));
+            const heap_allocator = @fieldParentPtr(Heap, "allocator", allocator);
+            return heap_allocator.allocate(size, alignment);
+        }
+    };
+}
 
 pub const writer = privileged.E9Writer{ .context = {} };
+
+pub fn SparseArray(comptime T: type) type {
+    return extern struct {
+        ptr: [*]T,
+        len: usize,
+        capacity: usize,
+
+        const Array = @This();
+
+        pub const Error = error{
+            index_out_of_bounds,
+        };
+
+        pub fn append(array: *Array, allocator: *Allocator, element: T) !void {
+            try array.ensureCapacity(allocator, array.len + 1);
+            const index = array.len;
+            array.len += 1;
+            const slice = array.ptr[0..array.len];
+            slice[index] = element;
+        }
+
+        fn ensureCapacity(array: *Array, allocator: *Allocator, desired_capacity: usize) !void {
+            if (array.capacity < desired_capacity) {
+                // Allocate a new array
+                const new_slice = try allocator.allocate(T, desired_capacity);
+                if (array.capacity == 0) {
+                    array.ptr = new_slice.ptr;
+                    array.capacity = new_slice.len;
+                } else {
+                    // Reallocate
+                    if (array.len > 0) {
+                        @memcpy(new_slice[0..array.len], array.ptr[0..array.len]);
+                    }
+
+                    // TODO: free
+
+                    array.ptr = new_slice.ptr;
+                    array.capacity = new_slice.len;
+                }
+            }
+        }
+
+        pub inline fn get(array: *Array, index: usize) T {
+            assert(array.len > index);
+            const slice = array.ptr[0..array.len];
+            return slice[index];
+        }
+
+        pub inline fn getChecked(array: *Array, index: usize) !T {
+            if (array.len > index) {
+                return array.get(index);
+            } else {
+                return error.index_out_of_bounds;
+            }
+        }
+    };
+}

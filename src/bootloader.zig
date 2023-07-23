@@ -315,6 +315,13 @@ pub const Information = extern struct {
                 return Error.unexpected_memory_map_entry_count;
             }
             bootloader_information.configuration.memory_map_diff = @as(u8, @intCast(memory_map_entry_count - new_memory_map_entry_count));
+
+            const entries = bootloader_information.getMemoryMapEntries();
+            const entry = entries[total_allocation.index];
+            assert(entry.region.address.value() == total_allocation.region.address.value());
+            assert(entry.region.size == total_allocation.region.size);
+
+            page_counters[total_allocation.index] = bootloader_information.getAlignedTotalSize() >> lib.arch.page_shifter(lib.arch.valid_page_sizes[0]);
         }
 
         // Check if the host entry still corresponds to the same index
@@ -366,7 +373,9 @@ pub const Information = extern struct {
                     }
 
                     const aligned_size = lib.alignForward(u64, ph.size_in_memory, lib.arch.valid_page_sizes[0]);
-                    const physical_allocation = try bootloader_information.allocatePages(aligned_size, lib.arch.valid_page_sizes[0], .{});
+                    const physical_allocation = try bootloader_information.allocatePages(aligned_size, lib.arch.valid_page_sizes[0], .{
+                        .virtual_address = @bitCast(@as(u64, 0)),
+                    });
                     const physical_address = physical_allocation.address;
                     const virtual_address = VirtualAddress.new(ph.virtual_address);
                     const flags = Mapping.Flags{ .write = ph.flags.writable, .execute = ph.flags.executable };
@@ -469,7 +478,7 @@ pub const Information = extern struct {
     }
 
     pub inline fn getSlice(information: *const Information, comptime offset_name: Slice.Name) []Slice.TypeMap[@intFromEnum(offset_name)] {
-        const slice_offset = information.slices.array.values[@intFromEnum(offset_name)];
+        const slice_offset = &information.slices.array.values[@intFromEnum(offset_name)];
         return slice_offset.dereference(offset_name, information);
     }
 
@@ -683,6 +692,10 @@ pub const MemoryMapEntry = extern struct {
         reserved = 1,
         bad_memory = 2,
     };
+
+    pub fn getUsedRegion(mmap_entry: MemoryMapEntry, page_counter: u32) PhysicalMemoryRegion {
+        return mmap_entry.region.slice(page_counter << lib.arch.page_shifter(lib.arch.valid_page_sizes[0]));
+    }
 
     pub fn getFreeRegion(mmap_entry: MemoryMapEntry, page_counter: u32) PhysicalMemoryRegion {
         return mmap_entry.region.offset(page_counter << lib.arch.page_shifter(lib.arch.valid_page_sizes[0]));
