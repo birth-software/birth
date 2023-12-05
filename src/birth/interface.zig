@@ -72,6 +72,10 @@ pub const PageTable = packed struct(u16) {
     };
 };
 
+pub const Mapping = packed struct(u32) {
+    foo: u32 = 0,
+};
+
 pub fn CommandBuilder(comptime list: []const []const u8) type {
     const capability_base_command_list = .{
         "copy",
@@ -164,6 +168,7 @@ pub const Command = extern struct {
             },
             .page_table => .{
                 "get",
+                "get_leaf",
             },
             .memory_mapping => .{},
             .page_table_mapping => .{},
@@ -284,6 +289,17 @@ fn CommandDescriptor(comptime capability: Capability, comptime command: Command.
                 .Arguments = extern struct {
                     descriptor: PageTable,
                     buffer: *[512]PageTable,
+                },
+                .ErrorSet = ErrorSet(&.{
+                    "index_out_of_bounds",
+                    "not_present",
+                }),
+            },
+            .get_leaf => .{
+                .Arguments = extern struct {
+                    /// This descriptor works for leaves as well
+                    descriptor: PageTable,
+                    buffer: *Leaf,
                 },
                 .ErrorSet = ErrorSet(&.{
                     "index_out_of_bounds",
@@ -689,6 +705,41 @@ pub fn Descriptor(comptime capability: Capability, comptime command: Command.fro
                         .fromArguments = F.fromArguments,
                     };
                 },
+                .get_leaf => blk: {
+                    const F = struct {
+                        inline fn toResult(raw_result: Raw.Result.Birth) void {
+                            _ = raw_result;
+                        }
+
+                        inline fn fromResult(result: T.Result) Raw.Result {
+                            _ = result;
+                            return Raw.Result{
+                                .birth = .{
+                                    .first = .{},
+                                    .second = 0,
+                                },
+                            };
+                        }
+
+                        const struct_helper = StructHelperArguments(T.Arguments);
+                        inline fn toArguments(raw_arguments: Raw.Arguments) T.ErrorSet.Error!T.Arguments {
+                            const args = try struct_helper.toArguments(raw_arguments);
+
+                            return args;
+                        }
+
+                        inline fn fromArguments(arguments: T.Arguments) Raw.Arguments {
+                            return struct_helper.fromArguments(arguments);
+                        }
+                    };
+
+                    break :blk .{
+                        .toResult = F.toResult,
+                        .fromResult = F.fromResult,
+                        .toArguments = F.toArguments,
+                        .fromArguments = F.fromArguments,
+                    };
+                },
                 else => .{},
             },
             else => .{},
@@ -1027,5 +1078,15 @@ pub const Raw = extern struct {
             assert(@sizeOf(T) == @sizeOf(u64));
             assert(@bitSizeOf(T) == @bitSizeOf(u64));
         }
+    };
+};
+
+pub const Leaf = extern struct {
+    mapped_physical: birth.interface.Memory,
+    own_physical: birth.interface.Memory,
+    flags: Flags,
+
+    pub const Flags = packed struct(u64) {
+        foo: u64 = 0,
     };
 };

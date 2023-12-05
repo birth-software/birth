@@ -1,4 +1,5 @@
 const lib = @import("lib");
+const Allocator = lib.Allocator;
 const assert = lib.assert;
 
 pub const arch = @import("birth/arch.zig");
@@ -13,6 +14,22 @@ pub const Scheduler = extern struct {
     core_id: u32,
     core_state: CoreState,
     bootstrap_thread: Thread,
+    fast_allocator: Allocator,
+
+    pub fn initializeAllocator(scheduler: *Scheduler) void {
+        scheduler.fast_allocator = Allocator{
+            .callbacks = .{
+                .allocate = callbackAllocate,
+            },
+        };
+    }
+
+    fn callbackAllocate(allocator: *Allocator, size: u64, alignment: u64) Allocator.Allocate.Error!Allocator.Allocate.Result {
+        const scheduler = @fieldParentPtr(Scheduler, "fast_allocator", allocator);
+        assert(scheduler.common.heap.address.isAligned(alignment));
+        const result = scheduler.common.heap.takeSlice(size) catch return error.OutOfMemory;
+        return @bitCast(result);
+    }
 
     pub const Common = extern struct {
         self: *Common,
@@ -24,16 +41,16 @@ pub const Scheduler = extern struct {
         setup_stack_lock: lib.Atomic(bool),
         disabled_save_area: arch.RegisterArena,
 
-        pub fn heapAllocateFast(common: *Common, comptime T: type) !*T {
-            const size = @sizeOf(T);
-            const alignment = @alignOf(T);
-            lib.log.debug("Heap: {}. Size: {}. Alignment: {}", .{ common.heap, size, alignment });
-            const result = try common.heap.takeSlice(size);
-            const ptr = &result.access(T)[0];
-            assert(lib.isAligned(@intFromPtr(ptr), alignment));
-
-            return ptr;
-        }
+        // pub fn heapAllocateFast(common: *Common, comptime T: type) !*T {
+        //     const size = @sizeOf(T);
+        //     const alignment = @alignOf(T);
+        //     lib.log.debug("Heap: {}. Size: {}. Alignment: {}", .{ common.heap, size, alignment });
+        //     const result = try common.heap.takeSlice(size);
+        //     const ptr = &result.access(T)[0];
+        //     assert(lib.isAligned(@intFromPtr(ptr), alignment));
+        //
+        //     return ptr;
+        // }
     };
 
     pub fn enqueueThread(scheduler: *Scheduler, thread_to_queue: *Thread) void {

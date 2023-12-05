@@ -27,55 +27,7 @@ pub const CrossTarget = std.zig.CrossTarget;
 
 pub const log = std.log;
 
-pub fn BitsetU64(comptime bits: comptime_int) type {
-    assert(bits <= @bitSizeOf(u64));
-    const max_value = maxInt(@Type(.{
-        .Int = .{
-            .signedness = .unsigned,
-            .bits = bits,
-        },
-    }));
-
-    return packed struct(u64) {
-        value: u64 = 0,
-
-        const Error = error{
-            block_full,
-        };
-
-        pub inline fn allocate(bitset: *@This()) !u6 {
-            if (bitset.value & max_value != max_value) {
-                // log.debug("Bitset: 0b{b}", .{bitset.value});
-                const result: u6 = @intCast(@ctz(~bitset.value));
-                // log.debug("Result: {}", .{result});
-                assert(!bitset.isSet(result));
-                bitset.set(result);
-                return result;
-            } else {
-                return error.block_full;
-            }
-        }
-
-        pub inline fn set(bitset: *@This(), index: u6) void {
-            assert(index < bits);
-            bitset.value |= (@as(u64, 1) << index);
-        }
-
-        pub inline fn clear(bitset: *@This(), index: u6) void {
-            assert(index < bits);
-            bitset.value &= ~(@as(u64, 1) << index);
-        }
-
-        pub inline fn isSet(bitset: @This(), index: u6) bool {
-            assert(index < bits);
-            return bitset.value & (@as(u64, 1) << index) != 0;
-        }
-
-        pub inline fn isFull(bitset: @This()) bool {
-            return bitset.value == max_value;
-        }
-    };
-}
+pub const data_structures = @import("lib/data_structures.zig");
 
 pub const Atomic = std.atomic.Atomic;
 

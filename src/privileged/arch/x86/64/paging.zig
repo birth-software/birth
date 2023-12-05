@@ -28,13 +28,6 @@ const bootloader = @import("bootloader");
 const paging = lib.arch.x86_64.paging;
 pub usingnamespace paging;
 
-pub fn entryCount(comptime level: paging.Level, limit: u64) u10 {
-    const index = baseFromVirtualAddress(level, limit - 1);
-    const result = @as(u10, index) + 1;
-    // @compileLog(limit, index, result);
-    return result;
-}
-
 const max_level_possible = 5;
 pub const IndexedVirtualAddress = packed struct(u64) {
     page_offset: u12 = 0,
@@ -71,11 +64,6 @@ const Level = enum(u2) {
     const count = @typeInfo(Level).Enum.fields.len;
 };
 
-pub fn baseFromVirtualAddress(comptime level: paging.Level, virtual_address: u64) u9 {
-    const indexed = @as(IndexedVirtualAddress, @bitCast(virtual_address));
-    return @field(indexed, @tagName(level));
-}
-
 pub const CPUPageTables = extern struct {
     pml4_table: PhysicalAddress,
     pdp_table: PhysicalAddress,
@@ -95,8 +83,6 @@ pub const CPUPageTables = extern struct {
         1 + // PD
         1; // PT
     const allocated_size = allocated_table_count * 0x1000;
-
-    const page_table_base = top;
 
     comptime {
         assert(top + (left_ptables * lib.arch.valid_page_sizes[0]) == base + lib.arch.valid_page_sizes[1]);
@@ -265,8 +251,8 @@ pub const Specific = extern struct {
     }
 
     fn mapGeneric(specific: Specific, asked_physical_address: PhysicalAddress, asked_virtual_address: VirtualAddress, size: u64, comptime asked_page_size: comptime_int, flags: MemoryFlags, page_allocator: PageAllocator) !void {
-        if (!isAlignedGeneric(u64, asked_physical_address.value(), asked_page_size)) {
-            //log.debug("PA: {}. Page size: 0x{x}", .{ asked_physical_address, asked_page_size });
+        if (!isAlignedGeneric(u64, asked_physical_address.value(), lib.arch.valid_page_sizes[0])) {
+            log.debug("PA: {}. Page size: 0x{x}", .{ asked_physical_address, asked_page_size });
             @panic("Misaligned physical address in mapGeneric");
         }
         if (!isAlignedGeneric(u64, asked_virtual_address.value(), asked_page_size)) {
@@ -475,106 +461,6 @@ pub const Specific = extern struct {
         return pt_entry_address;
     }
 
-    pub fn setMappingFlags(specific: Specific, virtual_address: u64, flags: Mapping.Flags) !void {
-        const indexed: IndexedVirtualAddress = @bitCast(virtual_address);
-
-        const vas_cr3 = specific.cr3;
-
-        const pml4_physical_address = vas_cr3.getAddress();
-
-        const pml4_table = try accessPageTable(pml4_physical_address, *PML4Table);
-        const pml4_entry = pml4_table[indexed.PML4];
-        if (!pml4_entry.present) {
-            return TranslateError.pml4_entry_not_present;
-        }
-
-        const pml4_entry_address = PhysicalAddress.new(unpackAddress(pml4_entry));
-        if (pml4_entry_address.value() == 0) {
-            return TranslateError.pml4_entry_address_null;
-        }
-
-        const pdp_table = try accessPageTable(pml4_entry_address, *PDPTable);
-        const pdp_entry = pdp_table[indexed.PDP];
-        if (!pdp_entry.present) {
-            return TranslateError.pdp_entry_not_present;
-        }
-
-        const pdp_entry_address = PhysicalAddress.new(unpackAddress(pdp_entry));
-        if (pdp_entry_address.value() == 0) {
-            return TranslateError.pdp_entry_address_null;
-        }
-
-        const pd_table = try accessPageTable(pdp_entry_address, *PDTable);
-        const pd_entry = pd_table[indexed.PD];
-        if (!pd_entry.present) {
-            return TranslateError.pd_entry_not_present;
-        }
-
-        const pd_entry_address = PhysicalAddress.new(unpackAddress(pd_entry));
-        if (pd_entry_address.value() == 0) {
-            return TranslateError.pd_entry_address_null;
-        }
-
-        const pt_table = try accessPageTable(pd_entry_address, *PTable);
-        const pt_entry = &pt_table[indexed.PT];
-        if (!pt_entry.present) {
-            return TranslateError.pd_entry_not_present;
-        }
-
-        pt_entry.write = flags.write;
-        pt_entry.user = flags.user;
-        pt_entry.page_level_cache_disable = flags.cache_disable;
-        pt_entry.global = flags.global;
-        pt_entry.execute_disable = !flags.execute;
-    }
-
-    pub fn debugMemoryMap(specific: Specific) !void {
-        log.debug("[START] Memory map dump 0x{x}\n", .{specific.cr3.getAddress().value()});
-
-        const pml4 = try specific.getCpuPML4Table();
-
-        for (pml4, 0..) |*pml4te, pml4_index| {
-            if (pml4te.present) {
-                const pdp_table = try accessPageTable(PhysicalAddress.new(unpackAddress(pml4te.*)), *PDPTable);
-
-                for (pdp_table, 0..) |*pdpte, pdp_index| {
-                    if (pdpte.present) {
-                        if (pdpte.page_size) {
-                            continue;
-                        }
-
-                        const pd_table = try accessPageTable(PhysicalAddress.new(unpackAddress(pdpte.*)), *PDTable);
-
-                        for (pd_table, 0..) |*pdte, pd_index| {
-                            if (pdte.present) {
-                                if (pdte.page_size) @panic("bbbb");
-
-                                const p_table = try accessPageTable(PhysicalAddress.new(unpackAddress(pdte.*)), *PTable);
-
-                                for (p_table, 0..) |*pte, pt_index| {
-                                    if (pte.present) {
-                                        const indexed_virtual_address = IndexedVirtualAddress{
-                                            .PML4 = @as(u9, @intCast(pml4_index)),
-                                            .PDP = @as(u9, @intCast(pdp_index)),
-                                            .PD = @as(u9, @intCast(pd_index)),
-                                            .PT = @as(u9, @intCast(pt_index)),
-                                        };
-
-                                        const virtual_address = indexed_virtual_address.toVirtualAddress();
-                                        const physical_address = unpackAddress(pte.*);
-                                        log.debug("0x{x} -> 0x{x}", .{ virtual_address.value(), physical_address });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        log.debug("[END] Memory map dump", .{});
-    }
-
     inline fn getUserCr3(specific: Specific) cr3 {
         assert(specific.isPrivileged());
         return @as(cr3, @bitCast(@as(u64, @bitCast(specific.cr3)) | paging.page_table_size));
@@ -714,8 +600,6 @@ fn mapPageTable2MB(pd_table: *PDTable, indexed: IndexedVirtualAddress, physical_
         log.err("Already mapped to: 0x{x}", .{unpackAddress(entry_value)});
         return MapError.already_present_2mb;
     }
-
-    assert(isAlignedGeneric(u64, physical_address, valid_page_sizes[1]));
 
     entry_pointer.* = @as(PDTE, @bitCast(getPageEntry(PDTE_2MB, physical_address, flags)));
 }

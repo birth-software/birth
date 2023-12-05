@@ -95,6 +95,7 @@ pub export fn start(scheduler: *Scheduler, arg_init: bool) callconv(.C) noreturn
 }
 
 fn initialize() !void {
+    currentScheduler().initializeAllocator();
     _ = try Virtual.AddressSpace.create();
 }
 

@@ -184,6 +184,58 @@ fn spawnInitCommon(init_file: []const u8, cpu_page_tables: paging.CPUPageTables)
     // TODO: delete in the future
     assert(cpu.bsp);
 
+    const init_cpu_scheduler = try cpu.heap.create(cpu.UserScheduler);
+    init_cpu_scheduler.* = cpu.UserScheduler{
+        .s = .{
+            .common = undefined,
+            .capability_root_node = cpu.interface.Root{
+                .static = .{
+                    .cpu = true,
+                    .boot = true,
+                    .process = true,
+                },
+                .dynamic = .{
+                    .io = .{
+                        .debug = true,
+                    },
+                    .memory = .{},
+                    .cpu_memory = .{
+                        .flags = .{
+                            .allocate = true,
+                        },
+                    },
+                    .page_table = cpu.interface.PageTables{
+                        .privileged = undefined,
+                        .user = birth.interface.PageTable{
+                            .index = 0,
+                            .entry_type = .page_table,
+                        },
+                        // .vmm = try cpu.interface.VMM.new(),
+                        .can_map_page_tables = true,
+                        .page_tables = .{
+                            .ptr = undefined,
+                            .len = 0,
+                            .capacity = 0,
+                        },
+                        .leaves = .{
+                            .ptr = undefined,
+                            .len = 0,
+                            .capacity = 0,
+                        },
+                    },
+                    .command_buffer_submission = .{ .region = PhysicalMemoryRegion.invalid() },
+                    .command_buffer_completion = .{ .region = PhysicalMemoryRegion.invalid() },
+                    .memory_mapping = .{},
+                    .page_table_mapping = .{},
+                },
+                .scheduler = .{
+                    .memory = undefined,
+                    // .memory = scheduler_physical_region,
+                },
+            },
+        },
+    };
+
     const init_elf = try ELF.Parser.init(init_file);
     const entry_point = init_elf.getEntryPoint();
     const program_headers = init_elf.getProgramHeaders();
@@ -231,6 +283,8 @@ fn spawnInitCommon(init_file: []const u8, cpu_page_tables: paging.CPUPageTables)
     const init_start_address = first_address orelse @panic("WTF");
     const init_top_address = init_start_address + segment_total_size;
     const user_scheduler_virtual_address = VirtualAddress.new(init_top_address);
+    init_cpu_scheduler.s.common = user_scheduler_virtual_address.access(*birth.Scheduler.Common);
+
     const user_scheduler_virtual_region = VirtualMemoryRegion.new(.{
         .address = user_scheduler_virtual_address,
         .size = lib.alignForward(usize, @sizeOf(birth.Scheduler), lib.arch.valid_page_sizes[0]),
@@ -247,58 +301,7 @@ fn spawnInitCommon(init_file: []const u8, cpu_page_tables: paging.CPUPageTables)
     // const page_table_regions = try PageTableRegions.create(user_virtual_region, cpu_page_tables);
     log.debug("Scheduler region", .{});
     const scheduler_physical_region = try cpu.page_allocator.allocate(user_scheduler_virtual_region.size, .{ .reason = .user });
-
-    log.debug("Heap scheduler", .{});
-    const init_cpu_scheduler = try cpu.heap.create(cpu.UserScheduler);
-    init_cpu_scheduler.* = cpu.UserScheduler{
-        .s = .{
-            .common = user_scheduler_virtual_address.access(*birth.Scheduler.Common),
-            .capability_root_node = cpu.interface.Root{
-                .static = .{
-                    .cpu = true,
-                    .boot = true,
-                    .process = true,
-                },
-                .dynamic = .{
-                    .io = .{
-                        .debug = true,
-                    },
-                    .memory = .{},
-                    .cpu_memory = .{
-                        .flags = .{
-                            .allocate = true,
-                        },
-                    },
-                    .page_table = cpu.interface.PageTables{
-                        .privileged = undefined,
-                        .user = birth.interface.PageTable{
-                            .index = 0,
-                            .entry_type = .page_table,
-                        },
-                        // .vmm = try cpu.interface.VMM.new(),
-                        .can_map_page_tables = true,
-                        .page_tables = .{
-                            .ptr = undefined,
-                            .len = 0,
-                            .capacity = 0,
-                        },
-                        .leaves = .{
-                            .ptr = undefined,
-                            .len = 0,
-                            .capacity = 0,
-                        },
-                    },
-                    .command_buffer_submission = .{ .region = PhysicalMemoryRegion.invalid() },
-                    .command_buffer_completion = .{ .region = PhysicalMemoryRegion.invalid() },
-                    .memory_mapping = .{},
-                    .page_table_mapping = .{},
-                },
-                .scheduler = .{
-                    .memory = scheduler_physical_region,
-                },
-            },
-        },
-    };
+    init_cpu_scheduler.s.capability_root_node.scheduler.memory = scheduler_physical_region;
 
     const scheduler_virtual_region = VirtualMemoryRegion.new(.{
         .address = user_scheduler_virtual_address,
@@ -309,7 +312,7 @@ fn spawnInitCommon(init_file: []const u8, cpu_page_tables: paging.CPUPageTables)
 
     const heap_virtual_region = VirtualMemoryRegion.new(.{
         .address = scheduler_virtual_region.top(),
-        .size = lib.alignForward(usize, scheduler_virtual_region.top().value(), lib.arch.valid_page_sizes[1]) - scheduler_virtual_region.top().value(),
+        .size = lib.alignForward(usize, scheduler_virtual_region.top().value(), 64 * lib.arch.valid_page_sizes[1]) - scheduler_virtual_region.top().value(),
     });
 
     log.debug("Heap region", .{});

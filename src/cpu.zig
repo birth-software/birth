@@ -167,9 +167,11 @@ pub const RegionList = extern struct {
 
     pub const Metadata = extern struct {
         reserved: usize = 0,
-        bitset: lib.BitsetU64(list_region_count) = .{},
+        bitset: Bitset = .{},
         previous: ?*RegionList = null,
         next: ?*RegionList = null,
+
+        const Bitset = lib.data_structures.BitsetU64(list_region_count);
 
         comptime {
             assert(@sizeOf(Metadata) == expected_size);
@@ -557,60 +559,3 @@ pub fn HeapImplementation(comptime user: bool) type {
 }
 
 pub const writer = privileged.E9Writer{ .context = {} };
-
-pub fn SparseArray(comptime T: type) type {
-    return extern struct {
-        ptr: [*]T,
-        len: usize,
-        capacity: usize,
-
-        const Array = @This();
-
-        pub const Error = error{
-            index_out_of_bounds,
-        };
-
-        pub fn append(array: *Array, allocator: *Allocator, element: T) !void {
-            try array.ensureCapacity(allocator, array.len + 1);
-            const index = array.len;
-            array.len += 1;
-            const slice = array.ptr[0..array.len];
-            slice[index] = element;
-        }
-
-        fn ensureCapacity(array: *Array, allocator: *Allocator, desired_capacity: usize) !void {
-            if (array.capacity < desired_capacity) {
-                // Allocate a new array
-                const new_slice = try allocator.allocate(T, desired_capacity);
-                if (array.capacity == 0) {
-                    array.ptr = new_slice.ptr;
-                    array.capacity = new_slice.len;
-                } else {
-                    // Reallocate
-                    if (array.len > 0) {
-                        @memcpy(new_slice[0..array.len], array.ptr[0..array.len]);
-                    }
-
-                    // TODO: free
-
-                    array.ptr = new_slice.ptr;
-                    array.capacity = new_slice.len;
-                }
-            }
-        }
-
-        pub inline fn get(array: *Array, index: usize) T {
-            assert(array.len > index);
-            const slice = array.ptr[0..array.len];
-            return slice[index];
-        }
-
-        pub inline fn getChecked(array: *Array, index: usize) !T {
-            if (array.len > index) {
-                return array.get(index);
-            } else {
-                return error.index_out_of_bounds;
-            }
-        }
-    };
-}

@@ -3,6 +3,7 @@ const assert = lib.assert;
 const Allocator = lib.Allocator;
 const enumCount = lib.enumCount;
 const log = lib.log.scoped(.capabilities);
+const SparseArray = lib.data_structures.SparseArray;
 const VirtualAddress = lib.VirtualAddress;
 
 const privileged = @import("privileged");
@@ -13,7 +14,6 @@ const VirtualMemoryRegion = lib.VirtualMemoryRegion;
 const birth = @import("birth");
 const cpu = @import("cpu");
 const RegionList = cpu.RegionList;
-const SparseArray = cpu.SparseArray;
 
 pub var system_call_count: usize = 0;
 
@@ -85,9 +85,8 @@ pub fn processCommand(comptime Descriptor: type, raw_arguments: birth.interface.
                 comptime assert(@TypeOf(arguments) == usize);
                 const size = arguments;
                 // TODO: we want more fine-grained control of the reason if we want more than a simple statistic
-                const physical_region = try cpu.page_allocator.allocate(size, .{ .reason = .user });
-                const result = try root.dynamic.memory.appendRegion(physical_region);
-                break :blk result;
+                const result = try root.allocateMemory(size);
+                break :blk result.reference;
             },
             .retype => blk: {
                 const source = arguments.source;
@@ -143,6 +142,16 @@ pub fn processCommand(comptime Descriptor: type, raw_arguments: birth.interface.
                 const page_table = &block.array[descriptor.index];
                 log.debug("Page table: {}", .{page_table.flags.level});
                 @memcpy(arguments.buffer, &page_table.children);
+            },
+            .get_leaf => {
+                const descriptor = arguments.descriptor;
+                assert(descriptor.entry_type == .leaf);
+
+                const block = try root.dynamic.page_table.leaves.getChecked(descriptor.block);
+                const leaf = &block.array[descriptor.index];
+
+                const user_leaf = arguments.buffer;
+                user_leaf.* = leaf.common;
             },
             else => @panic("TODO: page_table other"),
         },
@@ -354,8 +363,10 @@ pub const PageTable = extern struct {
 
     pub const Array = extern struct {
         array: [count]PageTable,
-        bitset: lib.BitsetU64(count),
+        bitset: Bitset,
         next: ?*Array = null,
+
+        pub const Bitset = lib.data_structures.BitsetU64(count);
 
         pub const count = 32;
 
@@ -370,6 +381,7 @@ pub const PageTable = extern struct {
 };
 
 pub const Leaf = extern struct {
+    common: birth.interface.Leaf,
     physical: PhysicalAddress,
     flags: Flags,
 
@@ -386,8 +398,9 @@ pub const Leaf = extern struct {
 
     pub const Array = extern struct {
         array: [count]Leaf,
-        bitset: lib.BitsetU64(count),
+        bitset: Bitset,
         next: ?*Array = null,
+        pub const Bitset = lib.data_structures.BitsetU64(count);
         pub const count = 32;
         pub fn get(array: *Array, index: u6) !*PageTable {
             if (array.bitset.isSet(index)) {
@@ -446,7 +459,7 @@ pub const PageTables = extern struct {
         }
 
         const page_table_array = try allocator.create(PageTable.Array);
-        try page_tables.page_tables.append(allocator, page_table_array);
+        _ = try page_tables.page_tables.append(allocator, page_table_array);
         return appendPageTable(page_tables, allocator, page_table);
     }
 
@@ -467,7 +480,7 @@ pub const PageTables = extern struct {
         }
 
         const leaf_array = try allocator.create(Leaf.Array);
-        try page_tables.leaves.append(allocator, leaf_array);
+        _ = try page_tables.leaves.append(allocator, leaf_array);
         return appendLeaf(page_tables, allocator, leaf);
     }
 
@@ -572,127 +585,18 @@ pub const Root = extern struct {
         return has_permissions;
     }
 
-    // Fast path
-    fn allocateMemoryRaw(root: *Root, size: usize) AllocateError!PhysicalMemoryRegion {
-        lib.log.err("New allocation demanded: 0x{x} bytes", .{size});
-        assert(size != 0);
-        assert(lib.isAligned(size, lib.arch.valid_page_sizes[0]));
-        var index = Memory.getListIndex(size);
-
-        const result = blk: {
-            while (true) : (index -= 1) {
-                const list = &root.dynamic.memory.lists[index];
-                var iterator: ?*cpu.capabilities.RegionList = list;
-
-                // const page_size = @as(u64, switch (index) {
-                //     0 => lib.arch.reverse_valid_page_sizes[0],
-                //     1 => lib.arch.reverse_valid_page_sizes[1],
-                //     2 => lib.arch.reverse_valid_page_sizes[2],
-                //     else => unreachable,
-                // });
-
-                var list_count: usize = 0;
-                while (iterator) |free_memory_list| : ({
-                    iterator = free_memory_list.metadata.next;
-                    list_count += 1;
-                }) {
-                    const allocation = free_memory_list.allocate(size) catch continue;
-                    list_count += 1;
-                    break :blk allocation;
-                }
-
-                if (index == 0) break;
-            }
-
-            log.err("allocateMemoryRaw", .{});
-            return error.OutOfMemory;
-        };
-
-        @memset(result.toHigherHalfVirtualAddress().access(u8), 0);
-
-        return result;
-    }
-
-    pub fn allocateMemory(root: *Root, size: usize) AllocateError!birth.capabilities.memory {
-        log.debug("Allocating 0x{x} bytes for user (root is 0x{x}", .{ size, @intFromPtr(root) });
-        const result = try allocateMemoryRaw(root, size);
-        const reference = root.dynamic.memory.allocated.append(result) catch |err| {
-            log.err("err(user): {}", .{err});
-            return AllocateError.OutOfMemory;
-        };
-        assert(reference.block == 0);
-        assert(reference.region == 0);
-        const region_address = &root.dynamic.memory.allocated.regions[reference.region];
-        log.debug("Region address: 0x{x}", .{@intFromPtr(region_address)});
-        return reference;
-    }
-
-    // Slow uncommon path. Use cases:
-    // 1. CR3 switch. This is assumed to be privileged, so this function assumes privileged use of the memory
-    pub fn allocatePageCustomAlignment(root: *Root, size: usize, alignment: usize) AllocateError!PhysicalMemoryRegion {
-        assert(alignment > lib.arch.valid_page_sizes[0] and alignment < lib.arch.valid_page_sizes[1]);
-
-        comptime assert(lib.arch.valid_page_sizes.len == 3);
-        var index = Memory.getListIndex(size);
-
-        while (true) : (index -= 1) {
-            const smallest_region_list = &root.dynamic.memory.lists[index];
-            var iterator: ?*cpu.capabilities.RegionList = smallest_region_list;
-            while (iterator) |free_region_list| : (iterator = free_region_list.metadata.next) {
-                const physical_allocation = free_region_list.allocateAligned(size, alignment) catch blk: {
-                    const splitted_allocation = free_region_list.allocateAlignedSplitting(size, alignment) catch continue;
-                    _ = try root.appendRegion(&root.dynamic.memory, splitted_allocation.wasted);
-                    break :blk splitted_allocation.allocated;
-                };
-
-                return physical_allocation;
-            }
-
-            if (index == 0) break;
-        }
-
-        log.err("allocatePageCustomAlignment", .{});
-        return AllocateError.OutOfMemory;
-    }
-
-    fn allocateSingle(root: *Root, comptime T: type) AllocateError!*T {
-        const size = @sizeOf(T);
-        const alignment = @alignOf(T);
-        var iterator = root.heap.first;
-        while (iterator) |heap_region| : (iterator = heap_region.next) {
-            if (heap_region.alignmentFits(alignment)) {
-                if (heap_region.sizeFits(size)) {
-                    const allocated_region = heap_region.takeRegion(size);
-                    const result = &allocated_region.toHigherHalfVirtualAddress().access(T)[0];
-                    return result;
-                }
-            } else {
-                @panic("ELSE");
-            }
-        }
-
-        const physical_region = try root.allocateMemory(lib.arch.valid_page_sizes[0]);
-        const heap_region = physical_region.toHigherHalfVirtualAddress().address.access(*Heap.Region);
-        const first = root.heap.first;
-        heap_region.* = .{
-            .descriptor = physical_region.offset(@sizeOf(Heap.Region)),
-            .allocated_size = @sizeOf(Heap.Region),
-            .next = first,
-        };
-
-        root.heap.first = heap_region;
-
-        return try root.allocateSingle(T);
-    }
-
-    fn allocateMany(root: *Root, comptime T: type, count: usize) AllocateError![]T {
-        _ = count;
-        _ = root;
-
-        @panic("TODO many");
-    }
-
-    pub const AllocateCPUMemoryOptions = packed struct {
-        privileged: bool,
+    pub const AllocateMemoryResult = extern struct {
+        region: PhysicalMemoryRegion,
+        reference: birth.interface.Memory,
     };
+
+    pub fn allocateMemory(root: *Root, size: usize) !AllocateMemoryResult {
+        const physical_region = try cpu.page_allocator.allocate(size, .{ .reason = .user });
+        const reference = try root.dynamic.memory.appendRegion(physical_region);
+
+        return .{
+            .region = physical_region,
+            .reference = reference,
+        };
+    }
 };

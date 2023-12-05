@@ -624,40 +624,71 @@ fn map(address_space: paging.Specific, virtual: VirtualAddress, physical: Physic
 
         var page_table_ref = user_page_tables.user;
 
-        for (0..paging.Level.count - 1) |level_index| {
-            const page_table = user_page_tables.getPageTable(page_table_ref) catch |err| {
-                log.err("Error {s} at level {} when trying to map 0x{x} to 0x{x}", .{ @errorName(err), level_index, virtual.value(), physical.value() });
-                const physical_address = address_space.translateAddress(virtual, .{
-                    .execute_disable = !flags.execute,
-                    .write = flags.write,
-                    .user = flags.user,
-                }) catch @panic("Could not translate address");
-                if (physical_address.value() != physical.value()) {
-                    @panic("Address mismatch");
-                } else {
-                    @panic("Address match");
-                }
-            };
-            page_table_ref = page_table.children[indices[level_index]];
-        }
-
         assert(indexed.PML4 == top_indexed.PML4);
         assert(indexed.PDP == top_indexed.PDP);
-        assert(indexed.PD == top_indexed.PD);
-        assert(indexed.PT <= top_indexed.PT);
+        log.debug("PD base: {}. PD top: {}", .{ indexed.PD, top_indexed.PD });
+        log.debug("PT base: {}. PT top: {}", .{ indexed.PT, top_indexed.PT });
+        var pd_index: u10 = indexed.PD;
+        var offset: usize = 0;
 
-        const page_table = try user_page_tables.getPageTable(page_table_ref);
-        var index: u10 = indexed.PT;
-        while (index <= top_indexed.PT) : (index += 1) {
-            const leaf = Leaf{
-                .physical = physical.offset(index - indexed.PT),
-                .flags = .{
-                    .size = .@"4KB",
-                },
-            };
-            const leaf_ref = try user_page_tables.appendLeaf(&cpu.user_scheduler.s.capability_root_node.heap.allocator, leaf);
-            page_table.children[index] = leaf_ref;
+        while (pd_index <= top_indexed.PD) : (pd_index += 1) {
+            const pt_base = if (pd_index == indexed.PD) indexed.PT else 0;
+            const pt_top = if (pd_index == top_indexed.PD) top_indexed.PT else 511;
+            log.debug("PD index: {}. Base: {}. Top: {}", .{ pd_index, pt_base, pt_top });
+
+            var pt_index = pt_base;
+            while (pt_index <= pt_top) : ({
+                pt_index += 1;
+                offset += lib.arch.valid_page_sizes[0];
+            }) {
+                const leaf = Leaf{
+                    .physical = physical.offset(offset),
+                    .flags = .{
+                        .size = .@"4KB",
+                    },
+                    .common = undefined, // TODO:
+                };
+                const leaf_ref = try user_page_tables.appendLeaf(&cpu.user_scheduler.s.capability_root_node.heap.allocator, leaf);
+                const level_fields = @typeInfo(paging.Level).Enum.fields;
+                inline for (level_fields[0 .. level_fields.len - 1]) |level_field| {
+                    const level = @field(paging.Level, level_field.name);
+                    const page_table = user_page_tables.getPageTable(page_table_ref) catch |err| {
+                        log.err("Error {s} at level {} when trying to map 0x{x} to 0x{x}", .{ @errorName(err), level, virtual.value(), physical.value() });
+                        const virtual_address = virtual.offset(offset);
+                        const physical_address = address_space.translateAddress(virtual_address, .{
+                            .execute_disable = !flags.execute,
+                            .write = flags.write,
+                            .user = flags.user,
+                        }) catch @panic("Could not translate address");
+                        if (physical_address.value() != physical.offset(offset).value()) {
+                            @panic("Address mismatch");
+                        } else {
+                            cpu.panic("PD index: {}. PT index: {}. Virtual: 0x{x}. Physical: 0x{x}", .{ pd_index, pt_index, virtual_address.value(), physical_address.value() });
+                        }
+                    };
+
+                    page_table_ref = page_table.children[indices[@intFromEnum(level)]];
+                }
+
+                const page_table = try user_page_tables.getPageTable(page_table_ref);
+                page_table.children[pt_index] = leaf_ref;
+            }
         }
+        // assert(indexed.PD == top_indexed.PD);
+        // assert(indexed.PT <= top_indexed.PT);
+
+        // var index: u10 = indexed.PT;
+        // while (index <= top_indexed.PT) : (index += 1) {
+        //     const leaf = Leaf{
+        //         .physical = physical.offset(index - indexed.PT),
+        //         .flags = .{
+        //             .size = .@"4KB",
+        //         },
+        //         .common = undefined, // TODO:
+        //     };
+        //     const leaf_ref = try user_page_tables.appendLeaf(&cpu.user_scheduler.s.capability_root_node.heap.allocator, leaf);
+        //     page_table.children[index] = leaf_ref;
+        // }
     }
 }
 
