@@ -1,6 +1,270 @@
 const common = @import("common.zig");
 pub usingnamespace common;
 
+const compiler_builtin = @import("builtin");
+pub const cpu = compiler_builtin.cpu;
+pub const os = compiler_builtin.os.tag;
+pub const build_mode = compiler_builtin.mode;
+pub const is_test = compiler_builtin.is_test;
+
+pub const kb = 1024;
+pub const mb = kb * 1024;
+pub const gb = mb * 1024;
+pub const tb = gb * 1024;
+
+pub const SizeUnit = enum(u64) {
+    byte = 1,
+    kilobyte = 1024,
+    megabyte = 1024 * 1024,
+    gigabyte = 1024 * 1024 * 1024,
+    terabyte = 1024 * 1024 * 1024 * 1024,
+};
+
+pub const std = @import("std");
+pub const Target = std.Target;
+pub const Cpu = Target.Cpu;
+pub const CrossTarget = std.zig.CrossTarget;
+
+pub const log = std.log;
+
+pub const data_structures = @import("lib/data_structures.zig");
+
+pub const Atomic = std.atomic.Atomic;
+
+pub const Reader = std.io.Reader;
+pub const Writer = std.io.Writer;
+
+pub const FixedBufferStream = std.io.FixedBufferStream;
+pub const fixedBufferStream = std.io.fixedBufferStream;
+
+pub fn assert(ok: bool) void {
+    if (!ok) {
+        if (@inComptime()) {
+            @compileError("Assert failed!");
+        } else {
+            @panic("Assert failed!");
+        }
+    }
+}
+
+pub const deflate = std.compress.deflate;
+
+const debug = std.debug;
+pub const print = debug.print;
+pub const StackIterator = debug.StackIterator;
+pub const dwarf = std.dwarf;
+pub const ModuleDebugInfo = std.debug.ModuleDebugInfo;
+
+pub const elf = std.elf;
+
+const fmt = std.fmt;
+pub const format = std.fmt.format;
+pub const FormatOptions = fmt.FormatOptions;
+pub const bufPrint = fmt.bufPrint;
+pub const allocPrint = fmt.allocPrint;
+pub const comptimePrint = fmt.comptimePrint;
+pub const parseUnsigned = fmt.parseUnsigned;
+
+const heap = std.heap;
+pub const FixedBufferAllocator = heap.FixedBufferAllocator;
+
+pub const json = std.json;
+
+const mem = std.mem;
+pub const ZigAllocator = mem.Allocator;
+pub const equal = mem.eql;
+pub const length = mem.len;
+pub const startsWith = mem.startsWith;
+pub const endsWith = mem.endsWith;
+pub const indexOf = mem.indexOf;
+// Ideal for small inputs
+pub const indexOfPosLinear = mem.indexOfPosLinear;
+pub const lastIndexOf = mem.lastIndexOf;
+pub const asBytes = mem.asBytes;
+pub const readIntBig = mem.readIntBig;
+pub const readIntSliceBig = mem.readIntSliceBig;
+pub const concat = mem.concat;
+pub const sliceAsBytes = mem.sliceAsBytes;
+pub const bytesAsSlice = mem.bytesAsSlice;
+pub const alignForward = mem.alignForward;
+pub const alignBackward = mem.alignBackward;
+pub const isAligned = mem.isAligned;
+pub const isAlignedGeneric = mem.isAlignedGeneric;
+pub const reverse = mem.reverse;
+pub const tokenize = mem.tokenize;
+pub const containsAtLeast = mem.containsAtLeast;
+pub const sliceTo = mem.sliceTo;
+pub const swap = mem.swap;
+
+pub const random = std.rand;
+
+pub const testing = std.testing;
+
+pub const sort = std.sort;
+
+pub fn fieldSize(comptime T: type, field_name: []const u8) comptime_int {
+    var foo: T = undefined;
+    return @sizeOf(@TypeOf(@field(foo, field_name)));
+}
+
+const DiffError = error{
+    diff,
+};
+
+pub fn diff(file1: []const u8, file2: []const u8) !void {
+    assert(file1.len == file2.len);
+    var different_bytes: u64 = 0;
+    for (file1, 0..) |byte1, index| {
+        const byte2 = file2[index];
+        const is_different_byte = byte1 != byte2;
+        different_bytes += @intFromBool(is_different_byte);
+        if (is_different_byte) {
+            log.debug("Byte [0x{x}] is different: 0x{x} != 0x{x}", .{ index, byte1, byte2 });
+        }
+    }
+
+    if (different_bytes != 0) {
+        log.debug("Total different bytes: 0x{x}", .{different_bytes});
+        return DiffError.diff;
+    }
+}
+
+pub fn zeroes(comptime T: type) T {
+    var result: T = undefined;
+    const slice = asBytes(&result);
+    @memset(slice, 0);
+    return result;
+}
+
+const ascii = std.ascii;
+pub const upperString = ascii.upperString;
+pub const isUpper = ascii.isUpper;
+pub const isAlphabetic = ascii.isAlphabetic;
+
+const std_builtin = std.builtin;
+pub const AtomicRmwOp = std_builtin.AtomicRmwOp;
+pub const AtomicOrder = std_builtin.AtomicOrder;
+pub const Type = std_builtin.Type;
+pub const StackTrace = std_builtin.StackTrace;
+pub const SourceLocation = std_builtin.SourceLocation;
+
+pub fn FieldType(comptime T: type, comptime name: []const u8) type {
+    return @TypeOf(@field(@as(T, undefined), name));
+}
+
+// META PROGRAMMING
+pub const AutoEnumArray = std.enums.EnumArray;
+pub const fields = std.meta.fields;
+pub const enumFromInt = std.meta.enumFromInt;
+pub const stringToEnum = std.meta.stringToEnum;
+pub const Tag = std.meta.Tag;
+
+const math = std.math;
+pub const maxInt = math.maxInt;
+pub const min = math.min;
+pub const divCeil = math.divCeil;
+pub const clamp = math.clamp;
+pub const isPowerOfTwo = math.isPowerOfTwo;
+pub const mul = math.mul;
+pub const cast = math.cast;
+
+pub const unicode = std.unicode;
+
+pub const uefi = std.os.uefi;
+
+pub const DiskType = enum(u32) {
+    virtio = 0,
+    nvme = 1,
+    ahci = 2,
+    ide = 3,
+    memory = 4,
+    bios = 5,
+
+    pub const count = enumCount(@This());
+};
+
+pub fn enumFields(comptime E: type) []const Type.EnumField {
+    return @typeInfo(E).Enum.fields;
+}
+
+pub const enumValues = std.enums.values;
+
+pub fn enumCount(comptime E: type) usize {
+    return enumFields(E).len;
+}
+
+pub const QEMU = extern struct {
+    pub const isa_debug_exit = ISADebugExit{};
+
+    pub const ISADebugExit = extern struct {
+        io_base: u8 = 0xf4,
+        io_size: u8 = @sizeOf(u32),
+    };
+
+    pub const ExitCode = enum(u32) {
+        success = 0x10,
+        failure = 0x11,
+        _,
+    };
+};
+
+pub const OptimizeMode = std.builtin.OptimizeMode;
+
+pub const Suffix = enum {
+    bootloader,
+    cpu_driver,
+    image,
+    complete,
+
+    pub fn fromConfiguration(suffix: Suffix, allocator: ZigAllocator, configuration: common.Configuration, prefix: ?[]const u8) ![]const u8 {
+        const cpu_driver_suffix = [_][]const u8{
+            @tagName(configuration.optimize_mode),
+            "_",
+            @tagName(configuration.architecture),
+            "_",
+            @tagName(configuration.executable_kind),
+        };
+
+        const bootloader_suffix = [_][]const u8{
+            @tagName(configuration.architecture),
+            "_",
+            @tagName(configuration.bootloader),
+            "_",
+            @tagName(configuration.boot_protocol),
+        };
+
+        const image_suffix = [_][]const u8{
+            @tagName(configuration.optimize_mode),
+            "_",
+        } ++ bootloader_suffix ++ [_][]const u8{
+            "_",
+            @tagName(configuration.executable_kind),
+        };
+
+        const complete_suffix = image_suffix ++ [_][]const u8{
+            "_",
+            @tagName(configuration.execution_type),
+            "_",
+            @tagName(configuration.execution_environment),
+        };
+
+        return try std.mem.concat(allocator, u8, &switch (suffix) {
+            .cpu_driver => if (prefix) |pf| [1][]const u8{pf} ++ cpu_driver_suffix else cpu_driver_suffix,
+            .bootloader => if (prefix) |pf| [1][]const u8{pf} ++ bootloader_suffix else bootloader_suffix,
+            .image => if (prefix) |pf| [1][]const u8{pf} ++ image_suffix else image_suffix,
+            .complete => if (prefix) |pf| [1][]const u8{pf} ++ complete_suffix else complete_suffix,
+        });
+    }
+};
+
+pub const default_cpu_name = "/cpu";
+pub const default_init_file = "/init";
+
+pub const default_disk_size = 64 * 1024 * 1024;
+pub const default_sector_size = 0x200;
+
+pub const cache_line_size = 64;
+
 pub const arch = @import("lib/arch.zig");
 /// This is done so the allocator can respect allocating from different address spaces
 pub const config = @import("lib/config.zig");
@@ -17,10 +281,9 @@ const extern_enum_array = @import("lib/extern_enum_array.zig");
 pub const EnumArray = extern_enum_array.EnumArray;
 
 pub fn memcpy(noalias destination: []u8, noalias source: []const u8) void {
-    @setRuntimeSafety(false);
     // Using this as the Zig implementation is really slow (at least in x86 with soft_float enabled
-    // if (common.cpu.arch == .x86 or common.cpu.arch == .x86_64 and common.Target.x86.featureSetHas(common.cpu.features, .soft_float)) {
-    const bytes_left = switch (common.cpu.arch) {
+    // if (cpu.arch == .x86 or cpu.arch == .x86_64 and Target.x86.featureSetHas(cpu.features, .soft_float)) {
+    const bytes_left = switch (cpu.arch) {
         .x86 => asm volatile (
             \\rep movsb
             : [ret] "={ecx}" (-> usize),
@@ -38,46 +301,16 @@ pub fn memcpy(noalias destination: []u8, noalias source: []const u8) void {
         else => @compileError("Unreachable"),
     };
 
-    common.assert(bytes_left == 0);
-    // } else {
-    //     @memcpy(destination, source);
-    // }
+    assert(bytes_left == 0);
 }
 
-// pub fn memset(comptime T: type, slice: []T, elem: T) void {
-//     @setRuntimeSafety(false);
-//
-//     const bytes_left = switch (T) {
-//         u8 => switch (common.cpu.arch) {
-//             .x86 => asm volatile (
-//                 \\rep stosb
-//                 : [ret] "={ecx}" (-> usize),
-//                 : [slice] "{edi}" (slice.ptr),
-//                   [len] "{ecx}" (slice.len),
-//                   [element] "{al}" (elem),
-//             ),
-//             .x86_64 => asm volatile (
-//                 \\rep movsb
-//                 : [ret] "={rcx}" (-> usize),
-//                 : [slice] "{rdi}" (slice.ptr),
-//                   [len] "{rcx}" (slice.len),
-//                   [element] "{al}" (elem),
-//             ),
-//             else => @compileError("Unsupported OS"),
-//         },
-//         else => @compileError("Type " ++ @typeName(T) ++ " not supported"),
-//     };
-//
-//     common.assert(bytes_left == 0);
-// }
-
 pub fn EnumStruct(comptime Enum: type, comptime Value: type) type {
-    const EnumFields = common.enumFields(Enum);
+    const EnumFields = enumFields(Enum);
     const MyEnumStruct = @Type(.{
         .Struct = .{
             .layout = .Extern,
             .fields = &blk: {
-                var arr = [1]common.Type.StructField{undefined} ** EnumFields.len;
+                var arr = [1]Type.StructField{undefined} ** EnumFields.len;
                 inline for (EnumFields) |EnumValue| {
                     arr[EnumValue.value] = .{
                         .name = EnumValue.name,
@@ -102,8 +335,8 @@ pub fn EnumStruct(comptime Enum: type, comptime Value: type) type {
         pub const Array = MyEnumArray;
     };
 
-    common.assert(@sizeOf(Union.Struct) == @sizeOf(Union.Array));
-    common.assert(@sizeOf(Union.Array) == @sizeOf(Union));
+    assert(@sizeOf(Union.Struct) == @sizeOf(Union.Array));
+    assert(@sizeOf(Union.Array) == @sizeOf(Union));
 
     return Union;
 }
@@ -115,7 +348,7 @@ pub const DirectoryTokenizer = struct {
     total_count: usize,
 
     pub fn init(string: []const u8) DirectoryTokenizer {
-        common.assert(string.len > 0);
+        assert(string.len > 0);
         var count: usize = 0;
 
         if (string[0] == '/') {
@@ -153,8 +386,8 @@ pub const DirectoryTokenizer = struct {
 
                 return tokenizer.string[original_index..];
             } else {
-                common.assert(original_index == tokenizer.string.len);
-                common.assert(tokenizer.given_count == tokenizer.total_count);
+                assert(original_index == tokenizer.string.len);
+                assert(tokenizer.given_count == tokenizer.total_count);
                 return null;
             }
         }
@@ -165,8 +398,8 @@ pub const DirectoryTokenizer = struct {
     }
 
     test "directory tokenizer" {
-        common.log.err("ajskdjsa", .{});
-        if (common.os != .freestanding) {
+        log.err("ajskdjsa", .{});
+        if (os != .freestanding) {
             const TestCase = struct {
                 path: []const u8,
                 expected_result: []const []const u8,
@@ -183,13 +416,13 @@ pub const DirectoryTokenizer = struct {
                 var result_count: usize = 0;
 
                 while (dir_tokenizer.next()) |dir| {
-                    try common.testing.expect(result_count < results.len);
-                    try common.testing.expectEqualStrings(case.expected_result[result_count], dir);
+                    try testing.expect(result_count < results.len);
+                    try testing.expectEqualStrings(case.expected_result[result_count], dir);
                     results[result_count] = dir;
                     result_count += 1;
                 }
 
-                try common.testing.expectEqual(case.expected_result.len, result_count);
+                try testing.expectEqual(case.expected_result.len, result_count);
             }
         }
     }
@@ -212,7 +445,7 @@ pub inline fn maybePtrSub(comptime T: type, ptr: ?*T, element_offset: usize) ?*T
 }
 
 test {
-    common.log.err("test not taken into the test suite");
+    log.err("test not taken into the test suite");
     _ = DirectoryTokenizer;
     _ = Filesystem;
     _ = PartitionTable;
@@ -237,7 +470,7 @@ pub const Allocator = extern struct {
     };
 
     /// Necessary to do this hack
-    const Callbacks = switch (common.cpu.arch) {
+    const Callbacks = switch (cpu.arch) {
         .x86 => extern struct {
             allocate: *const Allocate.Fn,
             allocate_padding: u32 = 0,
@@ -265,7 +498,7 @@ pub const Allocator = extern struct {
         return &result[0];
     }
 
-    pub fn wrap(zig_allocator: common.ZigAllocator) Wrapped {
+    pub fn wrap(zig_allocator: ZigAllocator) Wrapped {
         return .{
             .allocator = .{
                 .callbacks = .{
@@ -279,7 +512,7 @@ pub const Allocator = extern struct {
         };
     }
 
-    pub fn zigUnwrap(allocator: *Allocator) common.ZigAllocator {
+    pub fn zigUnwrap(allocator: *Allocator) ZigAllocator {
         return .{
             .ptr = allocator,
             .vtable = &zig_vtable,
@@ -293,11 +526,13 @@ pub const Allocator = extern struct {
     };
 
     pub fn zigAllocate(context: *anyopaque, size: usize, ptr_align: u8, return_address: usize) ?[*]u8 {
-        _ = context;
-        _ = size;
-        _ = ptr_align;
         _ = return_address;
-        return null;
+        const allocator: *Allocator = @ptrCast(@alignCast(context));
+        // Not understanding why Zig API is like this:
+        const alignment = @as(u64, 1) << @as(u6, @intCast(ptr_align));
+        const result = allocator.allocateBytes(size, alignment) catch return null;
+        assert(result.size >= size);
+        return @ptrFromInt(result.address);
     }
 
     pub fn zigResize(context: *anyopaque, buffer: []u8, buffer_alignment: u8, new_length: usize, return_address: usize) bool {
@@ -320,14 +555,14 @@ pub const Allocator = extern struct {
         allocator: Allocator,
         zig: extern struct {
             ptr: *anyopaque,
-            vtable: *const common.ZigAllocator.VTable,
+            vtable: *const ZigAllocator.VTable,
         },
 
         pub fn unwrap(wrapped_allocator: *Wrapped) *Allocator {
             return &wrapped_allocator.allocator;
         }
 
-        pub fn zigUnwrap(wrapped_allocator: *Wrapped) common.ZigAllocator {
+        pub fn zigUnwrap(wrapped_allocator: *Wrapped) ZigAllocator {
             return .{
                 .ptr = wrapped_allocator.zig.ptr,
                 .vtable = wrapped_allocator.zig.vtable,
@@ -337,7 +572,7 @@ pub const Allocator = extern struct {
         pub fn wrappedCallbackAllocate(allocator: *Allocator, size: u64, alignment: u64) Allocator.Allocate.Error!Allocator.Allocate.Result {
             const wrapped_allocator = @fieldParentPtr(Wrapped, "allocator", allocator);
             const zig_allocator = wrapped_allocator.zigUnwrap();
-            if (alignment > common.maxInt(u8)) {
+            if (alignment > maxInt(u8)) {
                 @panic("alignment supported by Zig is less than asked");
             }
             const zig_result = zig_allocator.vtable.alloc(zig_allocator.ptr, size, @as(u8, @intCast(alignment)), @returnAddress());
@@ -461,7 +696,7 @@ pub fn ELF(comptime bits: comptime_int) type {
                         return Parser.Error.invalid_magic;
                     }
 
-                    if (!common.equal(u8, &file_header.elf_id, FileHeader.elf_signature)) {
+                    if (!equal(u8, &file_header.elf_id, FileHeader.elf_signature)) {
                         return Parser.Error.invalid_signature;
                     }
 
@@ -484,7 +719,7 @@ pub fn ELF(comptime bits: comptime_int) type {
 
         pub const ProgramHeader = switch (is_64) {
             true => extern struct {
-                type: Type = .load,
+                type: @This().Type = .load,
                 flags: Flags, //= @enumToInt(Flags.readable) | @enumToInt(Flags.executable),
                 offset: u64,
                 virtual_address: u64,
@@ -518,7 +753,7 @@ pub fn ELF(comptime bits: comptime_int) type {
                     reserved: u29,
 
                     comptime {
-                        common.assert(@sizeOf(Flags) == @sizeOf(u32));
+                        assert(@sizeOf(Flags) == @sizeOf(u32));
                     }
                 };
             },
@@ -585,8 +820,8 @@ pub fn ELF(comptime bits: comptime_int) type {
 
 pub inline fn safeArchitectureCast(value: anytype) usize {
     return switch (@sizeOf(@TypeOf(value)) > @sizeOf(usize)) {
-        true => if (value <= common.maxInt(usize)) @as(usize, @truncate(value)) else {
-            common.log.err("PANIC: virtual address is longer than usize: 0x{x}", .{value});
+        true => if (value <= maxInt(usize)) @as(usize, @truncate(value)) else {
+            log.err("PANIC: virtual address is longer than usize: 0x{x}", .{value});
             @panic("safeArchitectureCast");
         },
         false => value,
@@ -598,11 +833,11 @@ pub const DereferenceError = error{
 };
 
 pub inline fn tryDereferenceAddress(value: anytype) DereferenceError!usize {
-    common.assert(@sizeOf(@TypeOf(value)) > @sizeOf(usize));
-    return if (value <= common.maxInt(usize)) @as(usize, @truncate(value)) else return DereferenceError.address_bigger_than_usize;
+    assert(@sizeOf(@TypeOf(value)) > @sizeOf(usize));
+    return if (value <= maxInt(usize)) @as(usize, @truncate(value)) else return DereferenceError.address_bigger_than_usize;
 }
 
-pub fn enumAddNames(comptime enum_fields: []const common.Type.EnumField, comptime names: []const []const u8) []const common.Type.EnumField {
+pub fn enumAddNames(comptime enum_fields: []const Type.EnumField, comptime names: []const []const u8) []const Type.EnumField {
     comptime var result = enum_fields;
     const previous_last_value = if (enum_fields.len > 0) enum_fields[enum_fields.len - 1].value else 0;
 
@@ -617,13 +852,13 @@ pub fn enumAddNames(comptime enum_fields: []const common.Type.EnumField, comptim
     return result;
 }
 
-pub fn ErrorSet(comptime error_names: []const []const u8, comptime predefined_fields: []const common.Type.EnumField) type {
-    comptime var error_fields: []const common.Type.Error = &.{};
-    comptime var enum_items: []const common.Type.EnumField = predefined_fields;
+pub fn ErrorSet(comptime error_names: []const []const u8, comptime predefined_fields: []const Type.EnumField) type {
+    comptime var error_fields: []const Type.Error = &.{};
+    comptime var enum_items: []const Type.EnumField = predefined_fields;
     comptime var enum_value = enum_items[enum_items.len - 1].value + 1;
 
     inline for (error_names) |error_name| {
-        enum_items = enum_items ++ [1]common.Type.EnumField{
+        enum_items = enum_items ++ [1]Type.EnumField{
             .{
                 .name = error_name,
                 .value = enum_value,
@@ -634,23 +869,23 @@ pub fn ErrorSet(comptime error_names: []const []const u8, comptime predefined_fi
     }
 
     inline for (enum_items) |item| {
-        error_fields = error_fields ++ [1]common.Type.Error{
+        error_fields = error_fields ++ [1]Type.Error{
             .{
                 .name = item.name,
             },
         };
     }
 
-    const EnumType = @Type(common.Type{
+    const EnumType = @Type(Type{
         .Enum = .{
-            .tag_type = u16,
+            .tag_type = u15,
             .fields = enum_items,
             .decls = &.{},
             .is_exhaustive = true,
         },
     });
 
-    const ErrorType = @Type(common.Type{
+    const ErrorType = @Type(Type{
         .ErrorSet = error_fields,
     });
 
@@ -660,12 +895,9 @@ pub fn ErrorSet(comptime error_names: []const []const u8, comptime predefined_fi
     };
 }
 
-pub fn getDebugInformation(allocator: common.ZigAllocator, elf_file: []align(common.default_sector_size) const u8) !common.ModuleDebugInfo {
-    const elf = common.elf;
-    var module_debug_info: common.ModuleDebugInfo = undefined;
-    _ = module_debug_info;
-    const hdr = @as(*const elf.Ehdr, @ptrCast(&elf_file[0]));
-    if (!common.equal(u8, hdr.e_ident[0..4], elf.MAGIC)) return error.InvalidElfMagic;
+pub fn getDebugInformation(allocator: ZigAllocator, elf_file: []align(arch.valid_page_sizes[0]) const u8) !ModuleDebugInfo {
+    const hdr = @as(*align(1) const elf.Ehdr, @ptrCast(&elf_file[0]));
+    if (!equal(u8, hdr.e_ident[0..4], elf.MAGIC)) return error.InvalidElfMagic;
     if (hdr.e_ident[elf.EI_VERSION] != 1) return error.InvalidElfVersion;
 
     const endian = .Little;
@@ -673,94 +905,110 @@ pub fn getDebugInformation(allocator: common.ZigAllocator, elf_file: []align(com
     const shoff = hdr.e_shoff;
     const str_section_off = shoff + @as(u64, hdr.e_shentsize) * @as(u64, hdr.e_shstrndx);
     const str_shdr = @as(
-        *const elf.Shdr,
-        @ptrCast(@alignCast(&elf_file[common.cast(usize, str_section_off) orelse return error.Overflow])),
+        *align(1) const elf.Shdr,
+        @ptrCast(&elf_file[cast(usize, str_section_off) orelse return error.Overflow]),
     );
     const header_strings = elf_file[str_shdr.sh_offset .. str_shdr.sh_offset + str_shdr.sh_size];
     const shdrs = @as(
-        [*]const elf.Shdr,
-        @ptrCast(@alignCast(&elf_file[shoff])),
+        [*]align(1) const elf.Shdr,
+        @ptrCast(&elf_file[shoff]),
     )[0..hdr.e_shnum];
 
-    var opt_debug_info: ?[]const u8 = null;
-    var opt_debug_abbrev: ?[]const u8 = null;
-    var opt_debug_str: ?[]const u8 = null;
-    var opt_debug_str_offsets: ?[]const u8 = null;
-    var opt_debug_line: ?[]const u8 = null;
-    var opt_debug_line_str: ?[]const u8 = null;
-    var opt_debug_ranges: ?[]const u8 = null;
-    var opt_debug_loclists: ?[]const u8 = null;
-    var opt_debug_rnglists: ?[]const u8 = null;
-    var opt_debug_addr: ?[]const u8 = null;
-    var opt_debug_names: ?[]const u8 = null;
-    var opt_debug_frame: ?[]const u8 = null;
+    var sections: dwarf.DwarfInfo.SectionArray = dwarf.DwarfInfo.null_section_array;
+
+    // Combine section list. This takes ownership over any owned sections from the parent scope.
+    errdefer for (sections) |section| if (section) |s| if (s.owned) allocator.free(s.data);
+
+    var separate_debug_filename: ?[]const u8 = null;
+    _ = separate_debug_filename;
+    var separate_debug_crc: ?u32 = null;
+    _ = separate_debug_crc;
 
     for (shdrs) |*shdr| {
-        if (shdr.sh_type == elf.SHT_NULL) continue;
+        if (shdr.sh_type == elf.SHT_NULL or shdr.sh_type == elf.SHT_NOBITS) continue;
+        const name = sliceTo(header_strings[shdr.sh_name..], 0);
 
-        const name = common.sliceTo(header_strings[shdr.sh_name..], 0);
-        if (common.equal(u8, name, ".debug_info")) {
-            opt_debug_info = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_abbrev")) {
-            opt_debug_abbrev = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_str")) {
-            opt_debug_str = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_str_offsets")) {
-            opt_debug_str_offsets = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_line")) {
-            opt_debug_line = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_line_str")) {
-            opt_debug_line_str = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_ranges")) {
-            opt_debug_ranges = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_loclists")) {
-            opt_debug_loclists = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_rnglists")) {
-            opt_debug_rnglists = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_addr")) {
-            opt_debug_addr = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_names")) {
-            opt_debug_names = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
-        } else if (common.equal(u8, name, ".debug_frame")) {
-            opt_debug_frame = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
+        if (equal(u8, name, ".gnu_debuglink")) {
+            @panic("WTF");
+            // const gnu_debuglink = try chopSlice(mapped_mem, shdr.sh_offset, shdr.sh_size);
+            // const debug_filename = mem.sliceTo(@as([*:0]const u8, @ptrCast(gnu_debuglink.ptr)), 0);
+            // const crc_offset = mem.alignForward(usize, @intFromPtr(&debug_filename[debug_filename.len]) + 1, 4) - @intFromPtr(gnu_debuglink.ptr);
+            // const crc_bytes = gnu_debuglink[crc_offset .. crc_offset + 4];
+            // separate_debug_crc = mem.readIntSliceNative(u32, crc_bytes);
+            // separate_debug_filename = debug_filename;
+            // continue;
         }
+
+        var section_index: ?usize = null;
+        inline for (@typeInfo(dwarf.DwarfSection).Enum.fields, 0..) |section, i| {
+            if (equal(u8, "." ++ section.name, name)) section_index = i;
+        }
+        if (section_index == null) continue;
+        if (sections[section_index.?] != null) continue;
+
+        const section_bytes = try chopSlice(elf_file, shdr.sh_offset, shdr.sh_size);
+        sections[section_index.?] = if ((shdr.sh_flags & elf.SHF_COMPRESSED) > 0) blk: {
+            var section_stream = fixedBufferStream(section_bytes);
+            var section_reader = section_stream.reader();
+            const chdr = section_reader.readStruct(elf.Chdr) catch continue;
+            if (chdr.ch_type != .ZLIB) continue;
+
+            if (true) @panic("ZLIB");
+            break :blk undefined;
+            // var zlib_stream = std.compress.zlib.decompressStream(allocator, section_stream.reader()) catch continue;
+            // defer zlib_stream.deinit();
+            //
+            // var decompressed_section = try allocator.alloc(u8, chdr.ch_size);
+            // errdefer allocator.free(decompressed_section);
+            //
+            // const read = zlib_stream.reader().readAll(decompressed_section) catch continue;
+            // assert(read == decompressed_section.len);
+            //
+            // break :blk .{
+            //     .data = decompressed_section,
+            //     .virtual_address = shdr.sh_addr,
+            //     .owned = true,
+            // };
+        } else .{
+            .data = section_bytes,
+            .virtual_address = shdr.sh_addr,
+            .owned = false,
+        };
     }
 
-    var di = common.dwarf.DwarfInfo{
+    const missing_debug_info =
+        sections[@intFromEnum(dwarf.DwarfSection.debug_info)] == null or
+        sections[@intFromEnum(dwarf.DwarfSection.debug_abbrev)] == null or
+        sections[@intFromEnum(dwarf.DwarfSection.debug_str)] == null or
+        sections[@intFromEnum(dwarf.DwarfSection.debug_line)] == null;
+    assert(!missing_debug_info);
+
+    var di = dwarf.DwarfInfo{
         .endian = endian,
-        .debug_info = opt_debug_info orelse return error.MissingDebugInfo,
-        .debug_abbrev = opt_debug_abbrev orelse return error.MissingDebugInfo,
-        .debug_str = opt_debug_str orelse return error.MissingDebugInfo,
-        .debug_str_offsets = opt_debug_str_offsets,
-        .debug_line = opt_debug_line orelse return error.MissingDebugInfo,
-        .debug_line_str = opt_debug_line_str,
-        .debug_ranges = opt_debug_ranges,
-        .debug_loclists = opt_debug_loclists,
-        .debug_rnglists = opt_debug_rnglists,
-        .debug_addr = opt_debug_addr,
-        .debug_names = opt_debug_names,
-        .debug_frame = opt_debug_frame,
+        .sections = sections,
+        .is_macho = false,
     };
 
-    try common.dwarf.openDwarfDebugInfo(&di, allocator);
+    try dwarf.openDwarfDebugInfo(&di, allocator);
+
     return di;
 }
 
 fn chopSlice(ptr: []const u8, offset: u64, size: u64) error{Overflow}![]const u8 {
-    const start = common.cast(usize, offset) orelse return error.Overflow;
-    const end = start + (common.cast(usize, size) orelse return error.Overflow);
+    const start = cast(usize, offset) orelse return error.Overflow;
+    const end = start + (cast(usize, size) orelse return error.Overflow);
     return ptr[start..end];
 }
 
 pub fn RegionInterface(comptime Region: type) type {
     const type_info = @typeInfo(Region);
-    common.assert(type_info == .Struct);
-    common.assert(type_info.Struct.layout == .Extern);
-    common.assert(type_info.Struct.fields.len == 2);
-    const fields = type_info.Struct.fields;
-    common.assert(common.equal(u8, fields[0].name, "address"));
-    common.assert(common.equal(u8, fields[1].name, "size"));
-    const Addr = fields[0].type;
+    assert(type_info == .Struct);
+    assert(type_info.Struct.layout == .Extern);
+    assert(type_info.Struct.fields.len == 2);
+    const region_fields = type_info.Struct.fields;
+    assert(equal(u8, region_fields[0].name, "address"));
+    assert(equal(u8, region_fields[1].name, "size"));
+    const Addr = region_fields[0].type;
     const AddrT = getAddrT(Addr);
 
     return struct {
@@ -773,6 +1021,14 @@ pub fn RegionInterface(comptime Region: type) type {
                 .size = info.size,
             };
         }
+
+        pub inline fn invalid() Region {
+            return Region{
+                .address = Addr.invalid(),
+                .size = 0,
+            };
+        }
+
         pub inline fn fromRaw(info: struct {
             raw_address: AddrT,
             size: AddrT,
@@ -808,7 +1064,7 @@ pub fn RegionInterface(comptime Region: type) type {
 
         pub inline fn fromAnytype(any: anytype, info: struct {}) Region {
             _ = info;
-            common.assert(@typeInfo(@TypeOf(any)) == .Pointer);
+            assert(@typeInfo(@TypeOf(any)) == .Pointer);
             return Region{
                 .address = VirtualAddress.new(@intFromPtr(any)),
                 .size = @sizeOf(@TypeOf(any.*)),
@@ -833,7 +1089,7 @@ pub fn RegionInterface(comptime Region: type) type {
         }
 
         pub fn shrinked(region: Region, size: AddrT) Region {
-            common.assert(size <= region.size);
+            assert(size <= region.size);
             const result = Region{
                 .address = region.address,
                 .size = size,
@@ -842,15 +1098,32 @@ pub fn RegionInterface(comptime Region: type) type {
             return result;
         }
 
-        pub inline fn takeSlice(region: *Region, size: AddrT) Region {
-            common.assert(size <= region.size);
-            const result = Region{
+        const TakeSliceError = error{
+            not_enough_space,
+        };
+
+        pub inline fn slice(region: *const Region, size: AddrT) Region {
+            assert(size <= region.size);
+            const result = .{
                 .address = region.address,
                 .size = size,
             };
-            region.* = region.offset(size);
 
             return result;
+        }
+
+        pub inline fn takeSlice(region: *Region, size: AddrT) !Region {
+            if (size <= region.size) {
+                const result = Region{
+                    .address = region.address,
+                    .size = size,
+                };
+                region.* = region.offset(size);
+
+                return result;
+            }
+
+            return TakeSliceError.not_enough_space;
         }
 
         pub inline fn split(region: Region, comptime count: comptime_int) [count]Region {
@@ -919,9 +1192,9 @@ pub const VirtualMemoryRegion = extern struct {
 
 fn getAddrT(comptime AddressEnum: type) type {
     const type_info = @typeInfo(AddressEnum);
-    common.assert(type_info == .Enum);
+    assert(type_info == .Enum);
     const AddrT = type_info.Enum.tag_type;
-    common.assert(switch (common.cpu.arch) {
+    assert(switch (cpu.arch) {
         .x86 => @sizeOf(AddrT) == 2 * @sizeOf(usize),
         else => @sizeOf(AddrT) == @sizeOf(usize),
     });
@@ -1023,12 +1296,12 @@ pub const VirtualAddress = enum(u64) {
     }
 
     pub inline fn toPhysicalAddress(virtual_address: VirtualAddress) PhysicalAddress {
-        common.assert(virtual_address.value() >= config.cpu_driver_higher_half_address);
+        assert(virtual_address.value() >= config.cpu_driver_higher_half_address);
         return @as(PhysicalAddress, @enumFromInt(virtual_address.value() - config.cpu_driver_higher_half_address));
     }
 
     pub inline fn toGuaranteedPhysicalAddress(virtual_address: VirtualAddress) PhysicalAddress {
-        common.assert(virtual_address.value() < config.cpu_driver_higher_half_address);
+        assert(virtual_address.value() < config.cpu_driver_higher_half_address);
         return PhysicalAddress.new(virtual_address.value());
     }
 };

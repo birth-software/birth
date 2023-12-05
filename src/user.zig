@@ -4,24 +4,20 @@ const assert = lib.assert;
 const ExecutionMode = lib.Syscall.ExecutionMode;
 
 const birth = @import("birth");
-const capabilities = birth.capabilities;
-pub const Syscall = birth.capabilities.Syscall;
+pub const Command = birth.interface.Command;
+pub const Interface = birth.interface.Descriptor;
+pub const Scheduler = birth.Scheduler;
 
 pub const arch = @import("user/arch.zig");
+pub const capabilities = @import("user/capabilities.zig");
 const core_state = @import("user/core_state.zig");
 pub const CoreState = core_state.CoreState;
-pub const PinnedState = core_state.PinnedState;
 pub const libc = @import("user/libc.zig");
 pub const thread = @import("user/thread.zig");
+pub const Thread = thread.Thread;
 pub const process = @import("user/process.zig");
-const vas = @import("user/virtual_address_space.zig");
+pub const Virtual = @import("user/virtual.zig");
 const VirtualAddress = lib.VirtualAddress;
-pub const VirtualAddressSpace = vas.VirtualAddressSpace;
-pub const MMUAwareVirtualAddressSpace = vas.MMUAwareVirtualAddressSpace;
-
-pub const PhysicalMap = @import("user/physical_map.zig").PhysicalMap;
-pub const PhysicalMemoryRegion = @import("user/physical_memory_region.zig").PhysicalMemoryRegion;
-pub const SlotAllocator = @import("user/slot_allocator.zig").SlotAllocator;
 
 comptime {
     @export(arch._start, .{ .linkage = .Strong, .name = "_start" });
@@ -29,8 +25,8 @@ comptime {
 
 pub const writer = lib.Writer(void, Writer.Error, Writer.write){ .context = {} };
 const Writer = extern struct {
-    const syscall = Syscall(.io, .log);
-    const Error = Writer.syscall.ErrorSet.Error;
+    const syscall = Interface(.io, .log);
+    const Error = Writer.syscall.Error;
 
     fn write(_: void, bytes: []const u8) Error!usize {
         const result = try Writer.syscall.blocking(bytes);
@@ -52,20 +48,14 @@ pub fn zigPanic(message: []const u8, _: ?*lib.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn panic(comptime format: []const u8, arguments: anytype) noreturn {
-    lib.log.scoped(.PANIC).err(format, arguments);
+    var buffer: [0x100]u8 = undefined;
+    const message: []const u8 = lib.bufPrint(&buffer, format, arguments) catch "Failed to get panic message!";
     while (true) {
-        Syscall(.process, .exit).blocking(false) catch |err| log.err("Exit failed: {}", .{err});
+        Interface(.process, .panic).blocking(.{
+            .message = message,
+            .exit_code = 1,
+        }) catch |err| log.err("Exit failed: {}", .{err});
     }
-}
-
-pub const Scheduler = extern struct {
-    time_slice: u32,
-    core_id: u32,
-    core_state: CoreState,
-};
-
-pub inline fn currentScheduler() *Scheduler {
-    return arch.currentScheduler();
 }
 
 fn schedulerInitDisabled(scheduler: *arch.Scheduler) void {
@@ -75,18 +65,38 @@ fn schedulerInitDisabled(scheduler: *arch.Scheduler) void {
 }
 
 pub var is_init = false;
-pub var command_buffer: birth.CommandBuffer = undefined;
+pub var command_buffer: Command.Buffer = undefined;
+const entry_count = 50;
 
-pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {
+const CommandBufferCreateError = error{
+    invalid_entry_count,
+};
+
+fn createCommandBuffer(options: Command.Buffer.CreateOptions) !Command.Buffer {
+    // TODO: allow kernel to chop slices of memories
+    try capabilities.setupCommandFrame(Command.Submission, options.submission_entry_count);
+    try capabilities.setupCommandFrame(Command.Completion, options.completion_entry_count);
+    @panic("TODO: createCommandBuffer");
+}
+
+pub export fn start(scheduler: *Scheduler, arg_init: bool) callconv(.C) noreturn {
     assert(arg_init);
     is_init = arg_init;
     if (is_init) {
-        assert(scheduler.common.generic.setup_stack_lock.load(.Monotonic));
+        assert(scheduler.common.setup_stack_lock.load(.Monotonic));
     }
-    assert(scheduler.common.generic.disabled);
-    scheduler.initDisabled();
-    // command_buffer = Syscall(.cpu, .get_command_buffer).blocking(&command_buffer) catch @panic("Unable to get command buffer");
-    Syscall(.cpu, .shutdown).blocking({}) catch unreachable;
+
+    initialize() catch |err| panic("Failed to initialize: {}", .{err});
+    @import("root").main() catch |err| panic("Failed to execute main: {}", .{err});
+
+    while (true) {
+        @panic("TODO: after main");
+    }
+}
+
+fn initialize() !void {
+    currentScheduler().initializeAllocator();
+    _ = try Virtual.AddressSpace.create();
 }
 
 // export fn birthInitializeDisabled(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) noreturn {
@@ -98,45 +108,7 @@ pub export fn start(scheduler: *arch.Scheduler, arg_init: bool) callconv(.C) nor
 // }
 
 // Barrelfish: vregion
-pub const VirtualMemoryRegion = extern struct {
-    virtual_address_space: *VirtualAddressSpace,
-    physical_region: *PhysicalMemoryRegion,
-    offset: usize,
-    size: usize,
-    address: VirtualAddress,
-    flags: Flags,
-    next: ?*VirtualMemoryRegion = null,
-
-    pub const Flags = packed struct(u8) {
-        read: bool = false,
-        write: bool = false,
-        execute: bool = false,
-        cache_disabled: bool = false,
-        preferred_page_size: u2 = 0,
-        write_combining: bool = false,
-        reserved: u1 = 0,
-    };
-};
-
-pub const MoreCore = extern struct {
-    const InitializationError = error{
-        invalid_page_size,
-    };
-
-    pub fn init(page_size: usize) InitializationError!void {
-        blk: inline for (lib.arch.valid_page_sizes) |valid_page_size| {
-            if (valid_page_size == page_size) break :blk;
-        } else {
-            return InitializationError.invalid_page_size;
-        }
-
-        const morecore_state = process.getMoreCoreState();
-        morecore_state.mmu_state = try MMUAwareVirtualAddressSpace.initAligned(SlotAllocator.getDefault(), lib.arch.valid_page_sizes[1], lib.arch.valid_page_sizes[0], .{ .read = true, .write = true });
-
-        @panic("TODO: MoreCore.init");
-    }
-
-    pub const State = extern struct {
-        mmu_state: MMUAwareVirtualAddressSpace,
-    };
-};
+pub inline fn currentScheduler() *birth.Scheduler {
+    const result = arch.maybeCurrentScheduler().?;
+    return result;
+}

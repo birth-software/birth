@@ -5,7 +5,7 @@ pub const CPUID = extern struct {
     ecx: u32,
 };
 
-pub inline fn cpuid(leaf: u32) CPUID {
+pub inline fn cpuid(leaf: u32, subleaf: u32) CPUID {
     var eax: u32 = undefined;
     var ebx: u32 = undefined;
     var edx: u32 = undefined;
@@ -18,6 +18,8 @@ pub inline fn cpuid(leaf: u32) CPUID {
           [edx] "={edx}" (edx),
           [ecx] "={ecx}" (ecx),
         : [leaf] "{eax}" (leaf),
+          [subleaf] "{ecx}" (subleaf),
+        : "memory"
     );
 
     return CPUID{

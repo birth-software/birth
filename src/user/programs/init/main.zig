@@ -9,7 +9,7 @@ pub const std_options = user.std_options;
 
 export var core_id: u32 = 0;
 
-pub fn main() !noreturn {
+pub fn main() !void {
     // core_id = try syscall(.cpu, .get_core_id).blocking({});
     // user.currentScheduler().core_id = core_id;
     // log.debug("Hello world! User space initialization from core #{}", .{core_id});
@@ -21,5 +21,5 @@ pub fn main() !noreturn {
     // const aligned_bundle_size = lib.alignForward(usize, bundle_size, lib.arch.valid_page_sizes[0]);
     // const bundle_allocation = try syscall(.cpu_memory, .allocate).blocking(aligned_bundle_size);
     // log.debug("Look allocation successful at 0x{x}", .{bundle_allocation.value()});
-    try syscall(.cpu, .shutdown).blocking({});
+    // try syscall(.cpu, .shutdown).blocking({});
 }

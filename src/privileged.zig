@@ -10,6 +10,7 @@ const assert = lib.assert;
 const log = lib.log;
 const maxInt = lib.maxInt;
 const Allocator = lib.Allocator;
+const VirtualAddress = lib.VirtualAddress;
 
 const bootloader = @import("bootloader");
 
@@ -64,7 +65,8 @@ pub const Mapping = extern struct {
         execute: bool = false,
         user: bool = false,
         secret: bool = false,
-        reserved: u26 = 0,
+        huge_pages: bool = true,
+        reserved: u25 = 0,
 
         pub inline fn empty() Flags {
             return .{};
@@ -86,6 +88,7 @@ pub const PageAllocator = struct {
         count: u16 = 1,
         level: arch.paging.Level,
         user: bool,
+        virtual_address: arch.paging.IndexedVirtualAddress,
     };
 
     pub inline fn allocatePageTable(page_allocator: PageAllocator, options: AllocatePageTablesOptions) !lib.PhysicalMemoryRegion {
@@ -94,6 +97,7 @@ pub const PageAllocator = struct {
             .level = options.level,
             .level_valid = true,
             .user = options.user,
+            .virtual_address = options.virtual_address,
         });
         return result;
     }
@@ -104,6 +108,7 @@ pub const PageAllocator = struct {
         level: arch.paging.Level = undefined,
         level_valid: bool = false,
         user: bool = false,
+        virtual_address: arch.paging.IndexedVirtualAddress,
     };
 
     const ContextType = enum(u32) {

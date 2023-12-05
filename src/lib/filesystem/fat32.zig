@@ -353,10 +353,7 @@ pub const Cache = extern struct {
         const aligned_file_size = lib.alignForward(usize, file_size, cache.disk.sector_size);
         const lba = cache.clusterToSector(first_cluster);
 
-        log.debug("Start disk callback", .{});
-
         const result = try cache.disk.callbacks.read(cache.disk, @divExact(aligned_file_size, cache.disk.sector_size), lba, file_buffer);
-        log.debug("End disk callback", .{});
         return result.buffer[0..file_size];
     }
 

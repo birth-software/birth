@@ -6,7 +6,7 @@ PHDRS {
 }
 
 SECTIONS {
-  . = 0x600000;
+  . = 0x200000;
   . = ALIGN(4K);
   .text . : {
     *(.text*)

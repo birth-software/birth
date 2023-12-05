@@ -15,6 +15,8 @@ pub const current = switch (@import("builtin").cpu.arch) {
 pub const x86 = @import("arch/x86.zig");
 pub const x86_64 = @import("arch/x86_64.zig");
 
+pub const paging = x86_64.paging;
+
 pub const default_page_size = current.default_page_size;
 pub const reasonable_page_size = current.reasonable_page_size;
 
