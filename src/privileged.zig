@@ -65,7 +65,8 @@ pub const Mapping = extern struct {
         execute: bool = false,
         user: bool = false,
         secret: bool = false,
-        reserved: u26 = 0,
+        huge_pages: bool = true,
+        reserved: u25 = 0,
 
         pub inline fn empty() Flags {
             return .{};

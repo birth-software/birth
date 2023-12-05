@@ -779,13 +779,14 @@ pub fn setupMapping(scheduler: *cpu.UserScheduler, user_virtual_region: VirtualM
     const scheduler_memory_map_flags = .{
         .write = true,
         .user = true,
+        .huge_pages = false,
     };
 
-    try map(user_address_space, regions.scheduler.virtual, regions.scheduler.physical, regions.scheduler.size, scheduler_memory_map_flags);
-    try map(user_address_space, regions.heap.virtual, regions.heap.physical, regions.heap.size, scheduler_memory_map_flags);
     for (init_file.segments) |segment| {
         try map(user_address_space, segment.virtual, segment.physical, segment.memory_size, segment.flags);
     }
+    try map(user_address_space, regions.scheduler.virtual, regions.scheduler.physical, regions.scheduler.size, scheduler_memory_map_flags);
+    try map(user_address_space, regions.heap.virtual, regions.heap.physical, regions.heap.size, scheduler_memory_map_flags);
 
     // Map protected stack
     const privileged_stack_physical_region = try cpu.page_allocator.allocate(x86_64.capability_address_space_stack_size, .{ .reason = .user_protected });
@@ -793,6 +794,7 @@ pub fn setupMapping(scheduler: *cpu.UserScheduler, user_virtual_region: VirtualM
         .write = true,
         .execute = false,
         .user = false,
+        .huge_pages = false,
     });
 
     const cpu_pml4 = try privileged_address_space.getPML4TableUnchecked();

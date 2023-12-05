@@ -266,6 +266,7 @@ fn spawnInitCommon(init_file: []const u8, cpu_page_tables: paging.CPUPageTables)
                     .execute = program_header.flags.executable,
                     .write = program_header.flags.writable,
                     .user = true,
+                    .huge_pages = false,
                 },
                 .file_offset = program_header.offset,
                 .file_size = program_header.size_in_file,

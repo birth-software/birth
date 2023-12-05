@@ -203,7 +203,7 @@ pub const Specific = extern struct {
             if (size >= reverse_page_size) {
                 const is_smallest_page_size = reverse_page_index == reverse_valid_page_sizes.len - 1;
 
-                if (is_smallest_page_size) {
+                if (is_smallest_page_size or !general_flags.huge_pages) {
                     var virtual_address = asked_virtual_address.value();
                     var physical_address = asked_physical_address.value();
 
